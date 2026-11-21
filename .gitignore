@@ -1,0 +1,22 @@
+# Runtime data and local backups must never be published.
+soulwine-api/data/
+**/node_modules/
+**/coverage/
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.log
+
+# Local secrets, credentials and editor/session state.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+.kilo/
+.vscode/
+.DS_Store
+Thumbs.db

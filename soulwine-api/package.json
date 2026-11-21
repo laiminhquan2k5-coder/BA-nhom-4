@@ -1,0 +1,17 @@
+{
+  "name": "soulwine-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SoulWine Operations REST API with transactional SQLite state and append-only audit records.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "backup": "node scripts/backup.js",
+    "seed:sample": "node scripts/seed-sample.js"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
