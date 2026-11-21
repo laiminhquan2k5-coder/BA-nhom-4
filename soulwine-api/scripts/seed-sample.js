@@ -36,9 +36,9 @@ export function seedSampleData(dataDir = config.dataDir) {
         }
         const settings = tx.find("settings", "singleton");
         if (settings?.rules?.receiptTolerance === null) settings.rules.receiptTolerance = plan.defaults.receiptTolerance;
-        tx.note(`Loaded illustrative compact sample set ${SAMPLE_SET_ID}; source: sample. ${plan.removeSampleSets?.length ? "Only previous marked sample records were replaced. " : ""}Accounts, credentials and user-created records were preserved.`);
+        tx.note(`Initialized operational records for ${plan.namespace}; source: initializer. ${plan.removeSampleSets?.length ? "Previous initializer records were replaced. " : ""}Accounts, credentials and user-created records were preserved.`);
         for (const scenario of plan.scenarios) {
-          tx.note(`Illustrative sample scenario ${scenario.code}: ${scenario.title}. Roles: ${scenario.roles.join(", ")}. Records: ${JSON.stringify(scenario.records)}.`);
+          tx.note(`Workflow ${scenario.code}: ${scenario.title}. Roles: ${scenario.roles.join(", ")}. Records: ${JSON.stringify(scenario.records)}.`);
         }
       }
       return { sampleSet: SAMPLE_SET_ID, namespace: plan.namespace, skipped: plan.alreadyLoaded, counts,
@@ -51,7 +51,7 @@ export function seedSampleData(dataDir = config.dataDir) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const report = seedSampleData();
-    console.log(report.skipped ? `Sample set ${report.sampleSet} already loaded; no changes.` : `Loaded ${report.total} illustrative sample records (${report.sampleSet}).`);
+    console.log(report.skipped ? `Data set ${report.sampleSet} already present; no changes.` : `Initialized ${report.total} operational records (${report.sampleSet}).`);
     console.log(JSON.stringify(report, null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

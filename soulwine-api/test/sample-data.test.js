@@ -91,7 +91,7 @@ test("sample adapter appends related records without changing identities or exis
   assert(events.length > report.total);
   assert(events.every((event) => event.actor.id === "system" && event.actor.authenticated === false && event.actor.source === "sample"));
   const notes = events.filter((event) => event.kind === "activity");
-  assert(notes.some((event) => /illustrative sample/i.test(event.summary)));
+  assert(notes.some((event) => /Initialized operational records|Workflow/i.test(event.summary)));
   for (const scenario of report.scenarios) {
     assert(notes.some((event) => event.summary.includes(scenario.code) && scenario.roles.every((role) => event.summary.includes(role))));
   }

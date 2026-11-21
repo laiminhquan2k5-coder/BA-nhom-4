@@ -3647,11 +3647,6 @@ tr[hidden] { display: none !important; }
 .otp-code { font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: 0.22em; color: var(--burgundy-700); font-size: 15px; }
 .otp-countdown { font-size: 10.5px; color: var(--ink-400); }
 .issued-password { margin: 10px 0 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--ivory-50); font-family: ui-monospace, Consolas, monospace; font-size: 15px; letter-spacing: 0.04em; color: var(--burgundy-800); user-select: all; }
-.sample-scenario { padding: 18px 0; border-bottom: 1px solid var(--border); }
-.sample-scenario:last-child { border-bottom: 0; }
-.sample-scenario h3 { font-size: 14px; line-height: 1.6; margin-bottom: 6px; }
-#sample-data-notice { flex-wrap: wrap; }
-#sample-data-notice > div { flex: 1; min-width: 180px; }
 .login-card h2 { margin-top: 4px; }
 html[data-density="compact"] .data tbody td { padding-top: 8px; padding-bottom: 8px; }
 html[data-density="compact"] .product-thumb { height: 30px; }

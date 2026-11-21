@@ -19,7 +19,7 @@
 
   function buildLinkedSampleData({ users, namespace = "LK01", now = new Date() }) {
     const base = new Date(now);
-    if (!Number.isFinite(base.valueOf())) throw new Error("Ngày khởi tạo dữ liệu mẫu không hợp lệ.");
+    if (!Number.isFinite(base.valueOf())) throw new Error("Ngày khởi tạo dữ liệu không hợp lệ.");
     const actors = {};
     for (const role of Object.keys(ROLE_NAMES)) {
       const user = users.find((item) => item.status === "user_active" && item.roleIds?.includes(role));
@@ -41,7 +41,7 @@
     const stamp = (timestamp) => new Date(timestamp).toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false }).replace(",", "").slice(0, 16);
     const add = (key, item) => { item.sampleSet = SAMPLE_SET_ID; item.sampleNamespace = namespace; collections[key].push(item); return item; };
     const owner = (role) => ({ createdBy: actors[role].id, createdById: actors[role].id, owner: actors[role].name });
-    const event = (role, action, object, detail, timestamp, tone = "info") => activity.push({ id: code("A"), time: stamp(timestamp), timestamp, actorId: actors[role].id, actor: actors[role].name, roleKey: role, role: ROLE_NAMES[role], action: `Dữ liệu mẫu · ${action}`, object, detail, tone, sampleSet: SAMPLE_SET_ID });
+    const event = (role, action, object, detail, timestamp, tone = "info") => activity.push({ id: code("A"), time: stamp(timestamp), timestamp, actorId: actors[role].id, actor: actors[role].name, roleKey: role, role: ROLE_NAMES[role], action: action, object, detail, tone, sampleSet: SAMPLE_SET_ID });
     const file = (reference, title) => {
       const id = code("FILE"), name = `${reference.replace(/[^A-Za-z0-9_-]/g, "-")}-${title}.pdf`, payload = pdfContent(reference.replace(/[^A-Za-z0-9_-]/g, "-"));
       attachments[id] = { id, name, type: "application/pdf", size: payload.size, content: payload.content, reference, savedAt: iso(-1), sampleSet: SAMPLE_SET_ID };
@@ -53,10 +53,10 @@
     };
     const total = (lines) => lines.reduce((sum, line) => { const gross = line.price * line.qty; return sum + gross - Math.round(gross * (line.discount || 0) / 100); }, 0);
     const productBySku = (sku) => collections.products.find((item) => item.sku === sku);
-    const inventory = (type, sku, physicalDelta, heldDelta, damagedDelta, reference, timestamp, role, note) => operations.push({ type, sku, physicalDelta, heldDelta, damagedDelta, ref: reference, timestamp, role, note: `Minh họa · ${note}` });
+    const inventory = (type, sku, physicalDelta, heldDelta, damagedDelta, reference, timestamp, role, note) => operations.push({ type, sku, physicalDelta, heldDelta, damagedDelta, ref: reference, timestamp, role, note });
 
     for (const [name, contact, terms] of [["Vinimport Hà Nội", "Nguyễn Quốc Bảo", "30 ngày"], ["Wine & Co", "Trần Mai Anh", "45 ngày"]]) {
-      add("suppliers", { id: code("NCC"), name, contact, phone: "0900000000", email: `supplier${collections.suppliers.length + 1}@example.test`, tax: "", address: "Hà Nội (địa chỉ minh họa)", terms, skus: 0, lastDelivery: display(iso(-210)), note: "Hồ sơ nhà cung cấp giả lập", ...owner("warehouse_manager") });
+      add("suppliers", { id: code("NCC"), name, contact, phone: "0900000000", email: `supplier${collections.suppliers.length + 1}@example.test`, tax: "", address: "Hà Nội", terms, skus: 0, lastDelivery: display(iso(-210)), note: "", ...owner("warehouse_manager") });
     }
     const catalog = [
       ["Château Lumières 2019", "Vang đỏ", "Pháp", "750 ml", "13,5%", "Chai", 1450000, 1250000, 60, 12, 0],
@@ -73,18 +73,18 @@
       ["Công ty Minh An", "Bán sỉ", "Nguyễn Văn Minh"], ["Nhà hàng Sen Vàng", "Bán sỉ", "Lê Thu Hà"],
       ["Trần Văn Hùng", "Bán lẻ", "Trần Văn Hùng"], ["Nguyễn Thu Trang", "Bán lẻ", "Nguyễn Thu Trang"]
     ];
-    customers.forEach(([name, type, contact], index) => add("customers", { id: code("KH"), name, type, kind: type === "Bán sỉ" ? "business" : "individual", contact, phone: `090100${String(index + 1).padStart(4, "0")}`, email: `customer${index + 1}@example.test`, tax: "", address: `${index + 10} Đường Minh Họa, Hà Nội`, invoiceAddress: `${index + 10} Đường Minh Họa, Hà Nội`, ar: 0, orders: 0, note: "Hồ sơ khách hàng giả lập, không liên hệ thực tế", ...owner("sales_staff") }));
+    customers.forEach(([name, type, contact], index) => add("customers", { id: code("KH"), name, type, kind: type === "Bán sỉ" ? "business" : "individual", contact, phone: `090100${String(index + 1).padStart(4, "0")}`, email: `customer${index + 1}@example.test`, tax: "", address: `${index + 10} Nguyễn Trãi, Hà Nội`, invoiceAddress: `${index + 10} Nguyễn Trãi, Hà Nội`, ar: 0, orders: 0, note: "", ...owner("sales_staff") }));
 
     function approval(type, reference, role, status, lines, amount, timestamp, requester = "sales_staff") {
-      return add("approvals", { id: code("AP"), type, ref: reference, title: type === "discount" ? "Chiết khấu bán sỉ" : type === "purchase" ? role === "accountant" ? "Kiểm tra tài chính mua hàng" : "Phê duyệt yêu cầu mua" : "Xác nhận thanh toán", assignee: role, status, requester: actors[requester].name, requesterId: actors[requester].id, amount, lines: structuredClone(lines), summary: "Dữ liệu mẫu liên kết giữa nhân sự kinh doanh, kế toán và kho.", evidence: [], createdAt: stamp(timestamp), timestamp, age: "", decidedAt: status === "pending" ? null : stamp(new Date(new Date(timestamp).valueOf() + 600000).toISOString()), decidedBy: status === "pending" ? null : actors[role].name, decidedById: status === "pending" ? null : actors[role].id, decidedRole: status === "pending" ? null : role, decisionNote: status === "approved" ? "Minh họa · Đồng ý theo hồ sơ đã kiểm tra" : "" });
+      return add("approvals", { id: code("AP"), type, ref: reference, title: type === "discount" ? "Chiết khấu bán sỉ" : type === "purchase" ? role === "accountant" ? "Kiểm tra tài chính mua hàng" : "Phê duyệt yêu cầu mua" : "Xác nhận thanh toán", assignee: role, status, requester: actors[requester].name, requesterId: actors[requester].id, amount, lines: structuredClone(lines), summary: "Đề nghị xem xét và phê duyệt theo hồ sơ đính kèm.", evidence: [], createdAt: stamp(timestamp), timestamp, age: "", decidedAt: status === "pending" ? null : stamp(new Date(new Date(timestamp).valueOf() + 600000).toISOString()), decidedBy: status === "pending" ? null : actors[role].name, decidedById: status === "pending" ? null : actors[role].id, decidedRole: status === "pending" ? null : role, decisionNote: status === "approved" ? "Đồng ý theo hồ sơ đã kiểm tra" : "" });
     }
     function purchase(products, supplier, days, mode = "completed", quantity = null, roleState = "both") {
       const lines = products.map((product) => ({ sku: product.sku, qty: quantity || product.sampleOpening, price: Math.round(product.wholesale * 0.65) }));
-      const request = add("purchaseRequests", { code: code("YCM"), supplier: supplier.id, requester: actors.warehouse_manager.name, requesterId: actors.warehouse_manager.id, createdAt: display(iso(days)), needed: display(iso(days + (mode === "completed" ? 0 : 4))), status: mode === "pending" ? "pending" : "approved", amount: total(lines), lines, note: "Minh họa · Bổ sung hàng phục vụ khách sỉ và định mức tồn", approvals: { accountant: mode !== "pending" || roleState === "accountant", director: mode !== "pending" || roleState === "director" }, ...owner("warehouse_manager") });
+      const request = add("purchaseRequests", { code: code("YCM"), supplier: supplier.id, requester: actors.warehouse_manager.name, requesterId: actors.warehouse_manager.id, createdAt: display(iso(days)), needed: display(iso(days + (mode === "completed" ? 0 : 4))), status: mode === "pending" ? "pending" : "approved", amount: total(lines), lines, note: "Bổ sung hàng phục vụ khách sỉ và định mức tồn", approvals: { accountant: mode !== "pending" || roleState === "accountant", director: mode !== "pending" || roleState === "director" }, ...owner("warehouse_manager") });
       for (const role of ["accountant", "director"]) approval("purchase", request.code, role, request.approvals[role] ? "approved" : "pending", lines, request.amount, iso(days, 8, 10), "warehouse_manager");
       if (mode === "pending") return { request };
       const po = add("purchaseOrders", { code: code("PO"), supplier: supplier.id, request: request.code, createdAt: display(iso(days)), receiveDate: display(iso(days)), amount: request.amount, status: mode === "completed" ? "completed" : "receiving", receipt: "", terms: supplier.terms, lines: structuredClone(lines), ...owner("warehouse_manager") });
-      const receipt = add("receipts", { code: code("PN"), po: po.code, supplier: supplier.id, eta: po.receiveDate, status: mode === "completed" ? "completed" : "receiving", threshold: 5, owner: actors.warehouse_staff.name, createdBy: actors.warehouse_staff.id, receivedById: actors.warehouse_staff.id, confirmedById: mode === "completed" ? actors.warehouse_manager.id : null, confirmedBy: mode === "completed" ? actors.warehouse_manager.name : "", evidence: [], note: "Minh họa · Nhân viên kho kiểm đếm, Quản lý kho xác nhận", lines: lines.map((line) => {
+      const receipt = add("receipts", { code: code("PN"), po: po.code, supplier: supplier.id, eta: po.receiveDate, status: mode === "completed" ? "completed" : "receiving", threshold: 5, owner: actors.warehouse_staff.name, createdBy: actors.warehouse_staff.id, receivedById: actors.warehouse_staff.id, confirmedById: mode === "completed" ? actors.warehouse_manager.id : null, confirmedBy: mode === "completed" ? actors.warehouse_manager.name : "", evidence: [], note: "Nhân viên kho kiểm đếm; Quản lý kho xác nhận", lines: lines.map((line) => {
         const product = productBySku(line.sku), received = mode === "over" ? line.qty - 4 : line.qty, damaged = mode === "completed" ? product.sampleDamage : mode === "over" ? 1 : 0;
         return { sku: line.sku, ordered: line.qty, received, good: received - damaged, damaged, counted: true };
       }) });
@@ -102,27 +102,27 @@
 
     function quote(customer, specs, days, status = "approved", role = "sales_staff") {
       const lines = specs.map(([index, qty, discount = 0]) => ({ sku: collections.products[index].sku, qty, discount, price: collections.products[index].wholesale }));
-      const record = add("quotes", { code: code("BG"), customerId: customer.id, channel: "Bán sỉ", ...owner(role), validUntil: display(iso(status === "expired" ? -5 : 20)), status, version: 1, createdAt: display(iso(days)), createdTimestamp: iso(days), lines, note: "Minh họa · Giao theo lịch hợp đồng; thanh toán theo thỏa thuận", confirmed: status !== "draft", confirmedById: actors[role].id, confirmBasis: "Minh họa · Khách xác nhận qua email" });
+      const record = add("quotes", { code: code("BG"), customerId: customer.id, channel: "Bán sỉ", ...owner(role), validUntil: display(iso(status === "expired" ? -5 : 20)), status, version: 1, createdAt: display(iso(days)), createdTimestamp: iso(days), lines, note: "Giao theo lịch hợp đồng; thanh toán theo thỏa thuận", confirmed: status !== "draft", confirmedById: actors[role].id, confirmBasis: "Khách xác nhận qua email" });
       const doc = document("Báo giá", record.code, role, iso(days), "bao-gia");
       if (status !== "draft" && status !== "expired") { const ap = approval("discount", record.code, "director", status === "pending" ? "pending" : "approved", lines, total(lines), iso(days, 9, 15), role); ap.evidence.push(doc.file); record.approvalId = ap.id; }
       event(role, "Lập báo giá", record.code, `${customer.name} · ${total(lines)} VND`, iso(days));
-      if (status === "approved") event("director", "Phê duyệt chiết khấu", record.code, "Minh họa · Mức chiết khấu theo từng dòng", iso(days, 9, 25), "success");
+      if (status === "approved") event("director", "Phê duyệt chiết khấu", record.code, "Mức chiết khấu theo từng dòng", iso(days, 9, 25), "success");
       return record;
     }
     function contract(source, days, status = "active", scheme = "50/50", dueDays = 15) {
       const record = add("contracts", { code: code("HD"), customerId: source.customerId, quote: source.code, ...owner("sales_manager"), value: total(source.lines), paid: 0, status, scheme, due: display(iso(dueDays)), signedAt: status === "active" ? display(iso(days)) : "", createdAt: iso(days, 9, 45), lines: structuredClone(source.lines), shipments: [], checklist: { customerConfirm: true, accountantCheck: status !== "checking", directorSign: status === "active" || status === "pending_sign", customerSign: status === "active", scan: status === "active" }, salesOwnerId: actors.sales_staff.id, accountantId: actors.accountant.id, directorId: actors.director.id, warehouseManagerId: actors.warehouse_manager.id });
       event("sales_manager", "Soạn hợp đồng", record.code, source.code, iso(days, 9, 45));
-      if (record.checklist.accountantCheck) event("accountant", "Kiểm tra điều khoản hợp đồng", record.code, "Minh họa · Hồ sơ hợp lệ", iso(days, 10), "success");
-      if (record.checklist.directorSign) event("director", "Ký hợp đồng", record.code, "Minh họa · Đã ký phía SoulWine", iso(days, 10, 30), "success");
+      if (record.checklist.accountantCheck) event("accountant", "Kiểm tra điều khoản hợp đồng", record.code, "Hồ sơ hợp lệ", iso(days, 10), "success");
+      if (record.checklist.directorSign) event("director", "Ký hợp đồng", record.code, "Đã ký phía SoulWine", iso(days, 10, 30), "success");
       if (status === "active") { const doc = document("Hợp đồng", record.code, "sales_manager", iso(days, 11), "hop-dong"); record.scanFile = doc.file; record.scanName = doc.file; record.scanId = doc.fileId; }
       return record;
     }
     function wholesale(source, days) {
-      return add("orders", { code: code("SO"), customerId: source.customerId, type: "Bán sỉ", channel: "Hợp đồng", quote: source.quote, contract: source.code, ...owner("sales_staff"), created: display(iso(days)), createdAt: iso(days, 12), status: source.paid > 0 ? "eligible" : "pending_payment", total: source.value, paid: source.paid, lines: source.lines.map((line) => ({ ...line, held: 0, shipped: 0 })), note: "Minh họa · Đơn thực hiện theo hợp đồng" });
+      return add("orders", { code: code("SO"), customerId: source.customerId, type: "Bán sỉ", channel: "Hợp đồng", quote: source.quote, contract: source.code, ...owner("sales_staff"), created: display(iso(days)), createdAt: iso(days, 12), status: source.paid > 0 ? "eligible" : "pending_payment", total: source.value, paid: source.paid, lines: source.lines.map((line) => ({ ...line, held: 0, shipped: 0 })), note: "Đơn thực hiện theo hợp đồng" });
     }
     function payment(record, amount, days, confirmed = true, method = "Chuyển khoản") {
       const role = method === "Tiền mặt" ? "sales_staff" : "accountant";
-      const paid = add("payments", { id: code("PAY"), record: record.code, customerId: record.customerId, amount, date: display(iso(days)), method, reference: code(method === "Tiền mặt" ? "PT" : "FT"), status: confirmed ? "confirmed" : "pending_confirm", confirmedBy: confirmed ? actors[role].name : "", confirmedById: confirmed ? actors[role].id : null, confirmedAt: confirmed ? iso(days, 9, 5) : "", evidenceReadyAt: iso(days), createdBy: actors.sales_staff.id, note: "Minh họa · Chứng từ và số tiền được liên kết với đơn/hợp đồng" });
+      const paid = add("payments", { id: code("PAY"), record: record.code, customerId: record.customerId, amount, date: display(iso(days)), method, reference: code(method === "Tiền mặt" ? "PT" : "FT"), status: confirmed ? "confirmed" : "pending_confirm", confirmedBy: confirmed ? actors[role].name : "", confirmedById: confirmed ? actors[role].id : null, confirmedAt: confirmed ? iso(days, 9, 5) : "", evidenceReadyAt: iso(days), createdBy: actors.sales_staff.id, note: "Chứng từ và số tiền được liên kết với đơn/hợp đồng" });
       paid.evidenceReadyAt = iso(days, record.scheme ? 14 : 9);
       paid.confirmedAt = confirmed ? iso(days, record.scheme ? 14 : 9, 5) : "";
       const attachment = file(paid.id, "chung-tu-thanh-toan"); paid.fileId = attachment.id; paid.proofName = attachment.name;
@@ -137,7 +137,7 @@
     function reserve(order, items, days, note = "Giữ theo điều kiện thanh toán") {
       items.forEach((item) => {
         const line = order.lines.find((entry) => entry.sku === item.sku); line.held += item.qty;
-        add("reservations", { id: code("GR"), order: order.code, customerId: order.customerId, sku: item.sku, qty: item.qty, since: display(iso(days)), expiry: display(iso(7)), status: "holding", note: `Minh họa · ${note}`, createdBy: actors.warehouse_manager.id });
+        add("reservations", { id: code("GR"), order: order.code, customerId: order.customerId, sku: item.sku, qty: item.qty, since: display(iso(days)), expiry: display(iso(7)), status: "holding", note, createdBy: actors.warehouse_manager.id });
         inventory("Giữ hàng", item.sku, 0, item.qty, 0, order.code, iso(days, 10), "warehouse_manager", note);
       });
       order.status = "holding"; order.readyForIssueAt = iso(days, 10);
@@ -151,7 +151,7 @@
         inventory("Xuất kho", item.sku, -item.qty, -item.qty, 0, record.code, iso(days, 10, 10), "warehouse_manager", order.code);
       });
       order.issueRequestedAt = iso(days, 10, 10);
-      const delivery = add("deliveries", { code: code("GH"), order: order.code, customerId: order.customerId, issue: record.code, contract: order.contract || "", shipmentId: shipment?.id || "", items: structuredClone(items), carrier: "Đơn vị giao nhận Minh Họa", planned: display(iso(days)), status, fee: 65000, payer: order.type === "Bán sỉ" ? "SoulWine" : "Khách hàng", address: collections.customers.find((customer) => customer.id === order.customerId).address, tracking: code("VD"), owner: actors.sales_staff.name, createdBy: actors.sales_staff.id, note: status === "failed" ? "Minh họa · Khách báo chai bị nứt, chờ thu hồi" : "Minh họa · Theo dõi qua biên bản giao nhận" });
+      const delivery = add("deliveries", { code: code("GH"), order: order.code, customerId: order.customerId, issue: record.code, contract: order.contract || "", shipmentId: shipment?.id || "", items: structuredClone(items), carrier: "Viettel Post", planned: display(iso(days)), status, fee: 65000, payer: order.type === "Bán sỉ" ? "SoulWine" : "Khách hàng", address: collections.customers.find((customer) => customer.id === order.customerId).address, tracking: code("VD"), owner: actors.sales_staff.name, createdBy: actors.sales_staff.id, note: status === "failed" ? "Khách báo chai bị nứt, chờ thu hồi" : "Theo dõi qua biên bản giao nhận" });
       if (status === "delivered") {
         const doc = document("Biên bản giao nhận", order.code, "sales_staff", iso(days, 14), "giao-nhan");
         delivery.evidenceFile = doc.file; delivery.evidence = doc.file; delivery.evidenceId = doc.fileId;
@@ -167,7 +167,7 @@
     }
     function retail(customer, specs, days, status = "delivered", cash = true) {
       const lines = specs.map(([index, qty]) => ({ sku: collections.products[index].sku, qty, price: collections.products[index].retail, held: 0, shipped: 0 }));
-      const order = add("orders", { code: code("SO"), customerId: customer.id, type: "Bán lẻ", channel: cash ? "Tại quầy" : "Facebook", quote: "", contract: "", ...owner("sales_staff"), created: display(iso(days)), createdAt: iso(days), status: "pending_payment", total: total(lines), paid: 0, lines, note: "Đơn hàng giả lập có thanh toán và chứng từ liên kết" });
+      const order = add("orders", { code: code("SO"), customerId: customer.id, type: "Bán lẻ", channel: cash ? "Tại quầy" : "Facebook", quote: "", contract: "", ...owner("sales_staff"), created: display(iso(days)), createdAt: iso(days), status: "pending_payment", total: total(lines), paid: 0, lines, note: "Đơn bán lẻ." });
       payment(order, order.total, days, status !== "pending_payment", cash ? "Tiền mặt" : "Chuyển khoản");
       if (status !== "pending_payment") { reserve(order, lines, days); const delivery = issue(order, lines.map((line) => ({ sku: line.sku, qty: line.qty })), days, status); return { order, delivery }; }
       return { order };
@@ -178,7 +178,7 @@
     const checkContract = contract(quote(collections.customers[0], [[1, 12, 5], [4, 6, 0]], -5), -4, "checking");
     const holdingContract = contract(quote(collections.customers[0], [[0, 8, 8], [2, 2, 5]], -9), -8);
     const holdingOrder = wholesale(holdingContract, -7); payment(holdingContract, holdingContract.value / 2, -6);
-    holdingContract.shipments = [1, 2].map((number) => ({ id: `Đợt ${number}`, date: display(iso(number === 1 ? 1 : 8)), items: holdingContract.lines.map((line) => ({ sku: line.sku, qty: line.qty / 2 })), status: number === 1 ? "due" : "planned", note: "Minh họa · Giao theo địa chỉ hợp đồng" }));
+    holdingContract.shipments = [1, 2].map((number) => ({ id: `Đợt ${number}`, date: display(iso(number === 1 ? 1 : 8)), items: holdingContract.lines.map((line) => ({ sku: line.sku, qty: line.qty / 2 })), status: number === 1 ? "due" : "planned", note: "Giao theo địa chỉ hợp đồng" }));
     reserve(holdingOrder, holdingContract.shipments[0].items, -1, "Đợt 1 · đã có cọc 50%");
     const payContract = contract(quote(collections.customers[1], [[4, 12, 5], [3, 4, 0]], -8), -7);
     const payOrder = wholesale(payContract, -5); const waitingPayment = payment(payContract, payContract.value / 2, -1, false);
@@ -186,7 +186,7 @@
 
     const facebook = retail(collections.customers[3], [[5, 1]], -1, "pending_payment", false);
     const shipping = retail(collections.customers[2], [[1, 2]], -1, "shipping", false);
-    const returned = add("returns", { code: code("DT"), order: completedRetail.order.code, customerId: completedRetail.order.customerId, delivery: completedRetail.delivery.code, sku: completedRetail.order.lines[1].sku, qty: 1, reason: "Minh họa · Chai bị nứt do vận chuyển", source: "Vận chuyển", status: "inspecting", createdAt: display(iso(-1)), evidence: [], note: "Chờ hàng trả về thực tế; chưa cộng tồn", createdBy: actors.sales_staff.id, assignedToId: actors.warehouse_manager.id });
+    const returned = add("returns", { code: code("DT"), order: completedRetail.order.code, customerId: completedRetail.order.customerId, delivery: completedRetail.delivery.code, sku: completedRetail.order.lines[1].sku, qty: 1, reason: "Chai bị nứt do vận chuyển", source: "Vận chuyển", status: "inspecting", createdAt: display(iso(-1)), evidence: [], note: "Chờ kiểm tra hàng hoàn.", createdBy: actors.sales_staff.id, assignedToId: actors.warehouse_manager.id });
     const returnFile = file(returned.code, "yeu-cau-doi-tra"); returned.evidence.push(returnFile.name);
 
     const purchasePending = purchase([collections.products[5], collections.products[4]], collections.suppliers[1], -1, "pending", 12);
@@ -204,12 +204,12 @@
       const timestamp = iso(days, 17);
       const lines = collections.products.map((product) => {
         const prior = collections.movements.filter((movement) => movement.sku === product.sku && movement.timestamp <= timestamp).at(-1);
-        return { sku: product.sku, system: prior?.physical || 0, count: prior?.physical || 0, note: "Minh họa · Đếm và đối chiếu khớp", reviewed: true, countedById: actors.warehouse_staff.id };
+        return { sku: product.sku, system: prior?.physical || 0, count: prior?.physical || 0, note: "Đếm và đối chiếu khớp", reviewed: true, countedById: actors.warehouse_staff.id };
       });
       const period = add("stocktakes", { code: code("KK"), scope: "Toàn kho", started: stamp(iso(days, 15)), status: "completed", locked: false, owner: actors.warehouse_manager.name, createdBy: actors.warehouse_manager.id, reportTo: stamp(timestamp), closedAt: timestamp, lines, closedLines: lines.map((line) => ({ sku: line.sku, count: line.count, final: line.count })) });
       document("Biên bản kiểm kê", period.code, "warehouse_manager", timestamp, "kiem-ke");
-      event("warehouse_staff", "Nhập số kiểm đếm", period.code, "Minh họa · Đối chiếu các mã trong kho", iso(days, 16));
-      event("warehouse_manager", "Hoàn tất kiểm kê", period.code, "Minh họa · Báo cáo Giám đốc và mở lại giao dịch", timestamp, "success");
+      event("warehouse_staff", "Nhập số kiểm đếm", period.code, "Đối chiếu các mã trong kho", iso(days, 16));
+      event("warehouse_manager", "Hoàn tất kiểm kê", period.code, "Báo cáo Giám đốc và mở lại giao dịch", timestamp, "success");
     }
     collections.customers.forEach((customer) => {
       customer.orders = collections.orders.filter((order) => order.customerId === customer.id).length;
@@ -233,7 +233,7 @@
   function validateSampleGraph(plan, users) {
     const c = plan.collections;
     const find = (collection, id) => c[collection].find((record) => record[PRIMARY_KEYS[collection] || "code"] === id);
-    const check = (condition, message) => { if (!condition) throw new Error(`Dữ liệu mẫu không nhất quán: ${message}`); };
+    const check = (condition, message) => { if (!condition) throw new Error(`Dữ liệu không nhất quán: ${message}`); };
     for (const key of COLLECTION_KEYS) {
       const ids = c[key].map((record) => record[PRIMARY_KEYS[key] || "code"]);
       check(new Set(ids).size === ids.length, `trùng mã ${key}`);
@@ -291,7 +291,7 @@
       const collision = COLLECTION_KEYS.some((key) => (collections[key] || []).some((record) => String(record[PRIMARY_KEYS[key] || "code"] || "").includes(`-${namespace}-`)));
       if (!collision) return { ...buildLinkedSampleData({ users, namespace, now }), removeSampleSets };
     }
-    throw new Error("Không thể cấp vùng mã dữ liệu mẫu mới. Không có bản ghi nào bị ghi đè.");
+    throw new Error("Không thể cấp vùng mã dữ liệu mới. Không có bản ghi nào bị ghi đè.");
   }
 
   const api = { SAMPLE_SET_ID, LEGACY_SAMPLE_SET_IDS, COLLECTION_KEYS, buildLinkedSampleData, createSamplePlan, validateSampleGraph };

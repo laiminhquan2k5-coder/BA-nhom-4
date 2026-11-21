@@ -24,7 +24,6 @@ const ACTION_ROLES = {
   "complete-stocktake": ["warehouse_manager"],
   "report-stocktake": ["warehouse_manager"],
   "new-user": ["director"],
-  "load-linked-sample": ["director"],
   "toggle-user": ["director"],
   "toggle-product": ["director", "sales_manager"],
   "new-contract": ["sales_manager", "sales_staff"],
@@ -707,9 +706,6 @@ function dispatchAction(action, data = {}) {
     return printRecord(kind, data.code || state.routeParam);
   }
   switch (action) {
-    case "load-linked-sample": return loadSampleFromSettings();
-    case "sample-guide": return showSampleGuide();
-    case "download-before-sample": return downloadBeforeSample();
     case "edit-customer": return showCustomerForm(data.id);
     case "close-dialog": return closeDialog();
     case "confirm-dialog": { const callback = activeDialog?.confirm; closeDialog(true); try { if (callback) callback(); } catch (error) { toast(error.message, "error"); } return; }

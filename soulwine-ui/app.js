@@ -133,7 +133,6 @@ function render(preserveScroll = false) {
     }
   });
   if (route === "quotes" && param) lockQuoteEditor();
-  if (route === "dashboard") viewElement.querySelector(".page-head")?.insertAdjacentHTML("afterend", sampleDataNotice());
   if (route === "stocktakes" && param) {
     const record = stocktakeByCode(param);
     viewElement.querySelectorAll("[data-st-field]").forEach((input) => input.disabled = !["warehouse_manager", "warehouse_staff"].includes(state.role) || record?.status !== "counting");

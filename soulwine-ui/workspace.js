@@ -57,7 +57,16 @@ function hydrateWorkspace(payload) {
 function loadWorkspace() {
   try {
     const raw = localStorage.getItem(WORKSPACE_KEY);
-    if (raw) { workspaceStatus.raw = raw; const payload = JSON.parse(raw); validateRestoredData(payload.data); hydrateWorkspace(payload); }
+    if (raw) {
+      workspaceStatus.raw = raw;
+      const payload = JSON.parse(raw);
+      validateRestoredData(payload.data);
+      const cleaned = typeof sanitizeDataTypeNotes === "function" ? sanitizeDataTypeNotes(payload.data) : payload.data;
+      const changed = JSON.stringify(cleaned) !== JSON.stringify(payload.data);
+      payload.data = cleaned;
+      hydrateWorkspace(payload);
+      if (changed) persistWorkspace();
+    }
     const profile = JSON.parse(sessionStorage.getItem(PROFILE_KEY) || "null");
     const user = profile && state.users.find((item) => item.id === profile.user && item.status === "user_active" && item.roleIds?.includes(profile.role));
     state.loggedIn = !!user;
