@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
-  const SAMPLE_SET_ID = "soulwine-linked-v2-compact";
-  const LEGACY_SAMPLE_SET_IDS = ["soulwine-linked-v1"];
+  const SAMPLE_SET_ID = "soulwine-linked-v3-history";
+  const LEGACY_SAMPLE_SET_IDS = ["soulwine-linked-v1", "soulwine-linked-v2-compact"];
   const COLLECTION_KEYS = ["products", "customers", "suppliers", "quotes", "approvals", "contracts", "orders", "payments", "reservations", "issues", "deliveries", "returns", "receipts", "purchaseRequests", "purchaseOrders", "documents", "movements", "stocktakes"];
   const PRIMARY_KEYS = { products: "sku", customers: "id", suppliers: "id", approvals: "id", payments: "id", reservations: "id", movements: "id" };
   const ROLE_NAMES = { director: "Giám đốc", accountant: "Kế toán", sales_manager: "Quản lý bán hàng", sales_staff: "Nhân viên bán hàng", warehouse_manager: "Quản lý kho", warehouse_staff: "Nhân viên kho" };
@@ -192,6 +192,29 @@
     const purchasePending = purchase([collections.products[5], collections.products[4]], collections.suppliers[1], -1, "pending", 12);
     const receiptReady = purchase([collections.products[0], collections.products[1]], collections.suppliers[0], -1, "receiving", 12);
 
+    const historyRetails = [
+      retail(collections.customers[2], [[0, 2], [4, 2]], -100, "delivered", true),
+      retail(collections.customers[3], [[1, 2]], -55, "delivered", false),
+      retail(collections.customers[2], [[2, 1], [5, 2]], -30, "delivered", true)
+    ];
+    const historyContract1 = contract(quote(collections.customers[0], [[0, 12, 5], [2, 4, 3]], -78, "approved", "sales_manager"), -77, "active", "50/50", -60);
+    const historyOrder1 = wholesale(historyContract1, -76);
+    payment(historyContract1, Math.round(historyContract1.value / 2), -75);
+    payment(historyContract1, historyContract1.value - Math.round(historyContract1.value / 2), -71);
+    const historyShipment1 = { id: "Đợt 1", date: display(iso(-73)), items: historyContract1.lines.map((line) => ({ sku: line.sku, qty: line.qty })), status: "planned", note: "Giao đủ một lần" };
+    historyContract1.shipments.push(historyShipment1);
+    reserve(historyOrder1, historyShipment1.items, -73);
+    issue(historyOrder1, historyShipment1.items, -71, "delivered", historyShipment1);
+    historyContract1.status = "liquidated";
+    historyContract1.liquidatedAt = iso(-69);
+    const historyContract2 = contract(quote(collections.customers[1], [[3, 12, 4], [5, 2, 0]], -48, "approved", "sales_manager"), -47, "active", "100%", -20);
+    const historyOrder2 = wholesale(historyContract2, -46);
+    payment(historyContract2, historyContract2.value, -45);
+    const historyShipment2 = { id: "Đợt 1", date: display(iso(-40)), items: historyContract2.lines.map((line) => ({ sku: line.sku, qty: line.qty })), status: "planned", note: "Giao đủ, chờ thanh lý" };
+    historyContract2.shipments.push(historyShipment2);
+    reserve(historyOrder2, historyShipment2.items, -40);
+    issue(historyOrder2, historyShipment2.items, -39, "delivered", historyShipment2);
+
     operations.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     operations.forEach((operation) => {
       const product = productBySku(operation.sku);
@@ -224,6 +247,7 @@
     scenario("Nhân viên kho kiểm đếm, Quản lý kho xác nhận nhập", ["warehouse_staff", "warehouse_manager", "accountant"], [receiptReady.receipt.code]);
     scenario("Bán lẻ Facebook chờ xác nhận tiền và giao hàng đang vận chuyển", ["sales_staff", "accountant", "warehouse_manager"], [facebook.order.code, shipping.order.code, shipping.delivery.code]);
     scenario("Tiếp nhận đổi trả từ đơn đã giao", ["sales_staff", "warehouse_manager", "accountant"], [returned.code, completedRetail.delivery.code, completedRetail.order.code]);
+    scenario("Lịch sử kinh doanh tháng 8-10: đơn bán lẻ và hai hợp đồng đã giao đủ", ["sales_staff", "sales_manager", "accountant", "warehouse_manager"], [historyContract1.code, historyContract2.code, ...historyRetails.map((entry) => entry.order.code)]);
     activity.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     const result = { alreadyLoaded: false, sampleSet: SAMPLE_SET_ID, namespace, collections, attachments, activity, defaults: { receiptTolerance: 5 }, scenarios, summary: { counts: Object.fromEntries(COLLECTION_KEYS.map((key) => [key, collections[key].length])) } };
     validateSampleGraph(result, users);

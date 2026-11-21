@@ -32,8 +32,9 @@ test("compact fixture replaces only the previous marked sample set, keeping auth
   assert.equal(report.namespace, "LK02");
   assert.equal(updated.list("products").length, 6);
   assert.equal(updated.list("customers").length, 4);
-  assert.equal(updated.list("orders").length, 5);
-  assert.equal(updated.list("contracts").length, 3);
+  assert.equal(updated.list("orders").length, 10);
+  assert.equal(updated.list("contracts").length, 5);
+  assert(updated.list("orders").filter((order) => order.status === "completed").length >= 6);
   assert(COLLECTION_KEYS.every((key) => updated.list(key).every((record) => record.sampleSet === SAMPLE_SET_ID)));
   assert.deepEqual(updated.list("credentials"), credentials);
   assert(updated.journal.length > auditCount);
