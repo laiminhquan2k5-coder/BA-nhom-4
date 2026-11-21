@@ -7,6 +7,8 @@ const files = new Map([
   ["/", ["index.html", "text/html"]],
   ["/index.html", ["index.html", "text/html"]],
   ["/styles.css", ["styles.css", "text/css"]],
+  ["/assets/logo2.png", ["assets/logo2.png", "image/png"]],
+  ["/assets/soulwine-hero.jpg", ["assets/soulwine-hero.jpg", "image/jpeg"]],
   ["/sample-data.js", ["../soulwine-shared/sample-data.cjs", "text/javascript"]],
   ["/soulwine-shared/sample-data.cjs", ["../soulwine-shared/sample-data.cjs", "text/javascript"]],
   ...["data.js", "ui.js", "views.js", "workflows.js", "workspace.js", "management.js", "auth.js", "sample-loader.js", "app.js"].map((file) => [`/${file}`, [file, "text/javascript"]])

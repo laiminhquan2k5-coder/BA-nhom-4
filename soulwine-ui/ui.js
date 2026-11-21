@@ -1,4 +1,4 @@
-state.ui = {
+﻿state.ui = {
   orderFilter: "all",
   orderSearch: "",
   quoteFilter: "all",
@@ -123,15 +123,15 @@ function lineChart(values, labels, id) {
     const x = left + (index / (labels.length - 1)) * plotWidth;
     return `<text x="${x}" y="${height - 10}" text-anchor="middle" class="chart-axis">${label}</text>`;
   }).join("");
-  const dots = points.map((point) => `<circle cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="3" fill="#FFFFFF" stroke="#6A1F2B" stroke-width="1.8"/>`).join("");
+  const dots = points.map((point) => `<circle cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="3" fill="#FFFFFF" stroke="#211D4F" stroke-width="1.8"/>`).join("");
   return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Biểu đồ doanh thu">
     <defs><linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#6A1F2B" stop-opacity="0.18"/>
-      <stop offset="100%" stop-color="#6A1F2B" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#211D4F" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#211D4F" stop-opacity="0"/>
     </linearGradient></defs>
     ${grid}
     <polygon points="${area}" fill="url(#${gradientId})"/>
-    <polyline points="${line}" fill="none" stroke="#6A1F2B" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="${line}" fill="none" stroke="#211D4F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
     ${dots}
     ${labelsHtml}
   </svg>`;

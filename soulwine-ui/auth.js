@@ -1,4 +1,4 @@
-const MAX_FAILED_LOGINS = 5;
+﻿const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
 const OTP_MINUTES = 5;
 const MAX_OTP_ATTEMPTS = 5;
@@ -92,7 +92,7 @@ function resetLoginFlow() {
 }
 
 function loginBrandPanel() {
-  return `<div class="login-brand"><div class="login-brand-top"><div class="brand-mark large">SW</div><div class="brand-name light">SoulWine</div></div><div class="login-quote"><div class="login-eyebrow">Một nguồn dữ liệu. Mọi quyết định rõ ràng.</div><h1>Vận hành chỉn chu,<br>kết nối từng giao dịch.</h1><p>Từ báo giá đến giao hàng, quản lý toàn bộ vòng đời đơn hàng và kiểm soát tồn kho trong một không gian thống nhất.</p></div><div class="login-brand-foot">SoulWine Operations · Quản trị kinh doanh &amp; kho hàng</div></div>`;
+  return `<div class="login-brand"><div class="login-brand-top"><img class="login-logo" src="assets/logo2.png" alt="SoulWine"></div><div class="login-quote"><div class="login-eyebrow">SoulWine Operations</div><h1>Từng chai chính hãng,<br>từng đơn chuẩn mực.</h1><p>Hệ thống vận hành nội bộ của SoulWine — nối báo giá, hợp đồng, kho hàng và thanh toán vào một nguồn dữ liệu duy nhất, đồng hành cùng hoạt động phân phối rượu toàn quốc.</p></div><div class="login-brand-foot">SoulWine Operations · Vận hành nội bộ</div></div>`;
 }
 
 function renderLoginScreen() {
@@ -108,20 +108,16 @@ function renderLoginScreen() {
   let card = "";
   if (loginFlow.mode === "login") {
     card = `<form class="login-card" id="login-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">ĐĂNG NHẬP</span>
-      <h2>Đăng nhập để tiếp tục</h2>
-      <p class="muted">Nhập email công việc và mật khẩu được cấp. Tài khoản tạm khóa sau ${MAX_FAILED_LOGINS} lần nhập sai liên tiếp.</p>
+      <h2>Chào mừng trở lại</h2>
       ${feedback}
       <div class="field"><label for="login-email">Email</label><input class="input" id="login-email" name="email" type="email" autocomplete="username" value="${escapeHtml(loginFlow.email)}" required></div>
       <div class="field"><label for="login-password">Mật khẩu</label><div class="input-affix"><input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-toggle-password="login-password" aria-label="Hiện hoặc ẩn mật khẩu">${icon("eye")}</button></div></div>
       <button class="btn btn-primary btn-block mt-16" type="submit">${icon("logout")} Đăng nhập</button>
       <div class="login-row"><button class="link-btn" type="button" data-auth-mode="forgot">Quên mật khẩu?</button></div>
-      <div class="local-data-note mt-24">${icon("lock")}<span>Tài khoản và mật khẩu (đã băm) lưu trên trình duyệt này; không thay thế xác thực tập trung của doanh nghiệp.</span></div>
     </form>`;
   } else if (loginFlow.mode === "must-change") {
     card = `<form class="login-card" id="must-change-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">BẢO MẬT TÀI KHOẢN</span>
       <h2>Đổi mật khẩu lần đầu</h2>
       <p class="muted">Mật khẩu hiện tại do Giám đốc cấp chỉ dùng để đăng nhập. Đặt mật khẩu riêng để tiếp tục.</p>
@@ -136,7 +132,6 @@ function renderLoginScreen() {
     const user = state.users.find((item) => item.id === loginFlow.userId);
     const roles = (user?.roleIds || []).filter((key) => ROLES[key]);
     card = `<form class="login-card" id="role-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">CHỌN VAI TRÒ</span>
       <h2>Vai trò làm việc hôm nay</h2>
       <p class="muted">${escapeHtml(user?.name || "")} được phân công ${roles.length} vai trò. Giao diện và thẩm quyền thay đổi theo lựa chọn.</p>
@@ -146,7 +141,6 @@ function renderLoginScreen() {
     </form>`;
   } else if (loginFlow.mode === "forgot") {
     card = `<form class="login-card" id="forgot-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">KHÔI PHỤC QUYỀN TRUY CẬP</span>
       <h2>Quên mật khẩu</h2>
       <p class="muted">Nhập email đăng ký. Hệ thống tạo mã xác nhận (OTP) hợp lệ ${OTP_MINUTES} phút để đặt lại mật khẩu và mở khóa tài khoản.</p>
@@ -159,7 +153,6 @@ function renderLoginScreen() {
     const otp = loginFlow.otp;
     const seconds = Math.max(0, Math.floor((otp.expiresAt - Date.now()) / 1000));
     card = `<form class="login-card" id="forgot-otp-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">KHÔI PHỤC QUYỀN TRUY CẬP</span>
       <h2>Nhập mã xác nhận</h2>
       <p class="muted">Mã 6 chữ số đã được tạo cho <strong>${escapeHtml(otp.email)}</strong>.</p>
@@ -174,7 +167,6 @@ function renderLoginScreen() {
     </form>`;
   } else if (loginFlow.mode === "forgot-reset") {
     card = `<form class="login-card" id="forgot-reset-form" novalidate>
-      <div class="login-logo-row"><div class="brand-mark">SW</div><span>SoulWine Operations</span></div>
       <span class="eyebrow">KHÔI PHỤC QUYỀN TRUY CẬP</span>
       <h2>Đặt mật khẩu mới</h2>
       <p class="muted">Mật khẩu mới áp dụng ngay, mở khóa đăng nhập và thay mọi mật khẩu cũ của <strong>${escapeHtml(loginFlow.otp?.email || loginFlow.email)}</strong>.</p>

@@ -1,4 +1,4 @@
-const viewElement = document.getElementById("view");
+﻿const viewElement = document.getElementById("view");
 let activeDialog = null;
 let lastDialogFocus = null;
 let activePopover = "";
@@ -470,13 +470,15 @@ function printRecord(kind, code) {
   if (!popup) return toast("Trình duyệt đã chặn cửa sổ in. Cho phép cửa sổ bật lên cho SoulWine rồi thử lại.", "warning");
   popup.opener = null;
   const organization = state.settings.organization;
-  popup.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>${text(title)} ${text(code)}</title><style>
-    body{font:13px/1.65 'Segoe UI',sans-serif;color:#1f1b18;max-width:760px;margin:35px auto;padding:20px}
-    header{display:flex;justify-content:space-between;border-bottom:2px solid #6a1f2b;padding-bottom:15px;gap:24px}h1{font:600 25px Georgia,serif;color:#6a1f2b;text-align:center;margin:32px 0}
-    table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #d8cfc2;padding:9px;text-align:left}th{background:#f6f1e9}.total{text-align:right;font-weight:700;font-size:17px}
-    .signatures{display:flex;justify-content:space-between;text-align:center;margin:45px 20px 90px}.print-meta{font-size:11px;color:#625c55;text-align:right}button{background:#6a1f2b;color:white;padding:10px 18px;border:0;border-radius:7px;cursor:pointer}
-    footer{border-top:1px solid #ddd;margin-top:90px;padding-top:10px;color:#625c55;font-size:11px}@page{size:A4;margin:18mm}@media print{body{margin:0;padding:0}button{display:none}th{print-color-adjust:exact}tr{break-inside:avoid}}
-    </style></head><body><header><div><b style="font:600 25px Georgia;color:#6a1f2b">${text(organization.name)}</b>${organization.address ? `<br>${text(organization.address)}` : ""}${organization.taxId ? `<br>MST: ${text(organization.taxId)}` : ""}</div><div class="print-meta">${text(code)}<br>Ngày xuất: ${text(nowStamp())}</div></header><h1>${title}</h1>${meta}${rows.length ? `<table><thead><tr>${columns.map((column) => `<th>${text(column)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value) => `<td>${text(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : ""}${total}<div class="signatures"><div><b>Đại diện ${text(organization.name)}</b><br><small>(Ký, ghi rõ họ tên)</small></div><div><b>Đại diện khách hàng / đối tác</b><br><small>(Ký, ghi rõ họ tên)</small></div></div><button type="button" onclick="window.print()">In / Lưu thành PDF</button><footer>Được xuất từ SoulWine Operations · ${text(nowStamp())}</footer></body></html>`);
+  const fontUrl = document.querySelector('link[href*="fonts.googleapis.com/css"]')?.href;
+  const fontLink = fontUrl ? `<link rel="stylesheet" href="${text(fontUrl)}">` : "";
+  popup.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>${text(title)} ${text(code)}</title>${fontLink}<style>
+    body{font:13px/1.65 'Nunito Sans','Segoe UI',sans-serif;color:#1b1a22;max-width:760px;margin:35px auto;padding:20px}
+    header{display:flex;justify-content:space-between;border-bottom:2px solid #211d4f;padding-bottom:15px;gap:24px}h1{font:600 30px 'Cormorant Garamond',Georgia,serif;color:#211d4f;text-align:center;margin:32px 0}.print-brand{font:600 30px 'Cormorant Garamond',Georgia,serif;color:#211d4f}
+    table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #e4e2dc;padding:9px;text-align:left}th{background:#f0efec}.total{text-align:right;font-weight:700;font-size:17px}
+    .signatures{display:flex;justify-content:space-between;text-align:center;margin:45px 20px 90px}.print-meta{font-size:11px;color:#555363;text-align:right}button{background:#211d4f;color:white;padding:10px 18px;border:0;border-radius:10px;cursor:pointer;font:600 13px 'Nunito Sans','Segoe UI',sans-serif}
+    footer{border-top:1px solid #e4e2dc;margin-top:90px;padding-top:10px;color:#555363;font-size:11px}@page{size:A4;margin:18mm}@media print{body{margin:0;padding:0}button{display:none}th{print-color-adjust:exact}tr{break-inside:avoid}}
+    </style></head><body><header><div><b class="print-brand">${text(organization.name)}</b>${organization.address ? `<br>${text(organization.address)}` : ""}${organization.taxId ? `<br>MST: ${text(organization.taxId)}` : ""}</div><div class="print-meta">${text(code)}<br>Ngày xuất: ${text(nowStamp())}</div></header><h1>${title}</h1>${meta}${rows.length ? `<table><thead><tr>${columns.map((column) => `<th>${text(column)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value) => `<td>${text(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : ""}${total}<div class="signatures"><div><b>Đại diện ${text(organization.name)}</b><br><small>(Ký, ghi rõ họ tên)</small></div><div><b>Đại diện khách hàng / đối tác</b><br><small>(Ký, ghi rõ họ tên)</small></div></div><button type="button" onclick="window.print()">In / Lưu thành PDF</button><footer>Được xuất từ SoulWine Operations · ${text(nowStamp())}</footer></body></html>`);
   popup.document.close();
 }
 
