@@ -67,7 +67,7 @@ const STATUS_META = {
   product_active: { label: "Đang kinh doanh", tone: "success" }, product_inactive: { label: "Ngừng kinh doanh", tone: "neutral" },
   user_active: { label: "Đang hoạt động", tone: "success" }, user_locked: { label: "Đã khóa", tone: "danger" },
   delivery_pending: { label: "Chờ giao", tone: "neutral" }, delivery_partial: { label: "Giao một phần", tone: "warning" }, return_received: { label: "Đã nhận · Chờ nhập", tone: "warning" }, low: { label: "Dưới định mức", tone: "warning" },
-  out: { label: "Cạn hàng", tone: "danger" }
+  out: { label: "Cạn hàng", tone: "danger" }, return_finance_pending: { label: "Chờ xử lý tài chính", tone: "warning" }
 };
 const ENTITY_KEYS = ["customers", "products", "quotes", "orders", "contracts", "reservations", "approvals", "payments", "receipts", "purchaseRequests", "purchaseOrders", "suppliers", "deliveries", "returns", "documents", "issues", "movements", "stocktakes", "audit", "users"];
 const state = {
@@ -96,6 +96,26 @@ function orderByCode(code) { return state.orders.find((item) => item.code === co
 function contractByCode(code) { return state.contracts.find((item) => item.code === code); }
 function receiptByCode(code) { return state.receipts.find((item) => item.code === code); }
 function stocktakeByCode(code) { return state.stocktakes.find((item) => item.code === code); }
+function returnIsPosted(item) {
+  // Legacy completed records already changed stock; never replay their posting.
+  return !!(item.postedAt || ["completed", "return_finance_pending"].includes(item.status) || state.movements.some((move) => move.type === "Hàng hoàn" && move.ref === item.code));
+}
+function returnFinanceEvidence(item) {
+  return (item.resolutionEvidence || []).filter((entry) => {
+    const file = state.attachments[entry.evidenceId];
+    return entry.track === "finance" && entry.actorRole === "accountant" && !!entry.actorId && typeof entry.reference === "string" && !!entry.reference.trim() && entry.reference.length <= 120 && typeof entry.note === "string" && !!entry.note.trim() && entry.note.length <= 240 && Number.isFinite(Date.parse(entry.recordedAt)) && file?.reference === item.code && file.size > 0 && typeof file.content === "string" && !!file.content;
+  });
+}
+function returnFinanciallyResolved(item) {
+  const resolution = item.financialResolution;
+  if (!returnIsPosted(item) || resolution?.status !== "resolved" || resolution.authorized !== true || resolution.verified !== true || resolution.actorRole !== "accountant" || !resolution.actorId || !Number.isFinite(Date.parse(resolution.resolvedAt))) return false;
+  if (typeof resolution.authorizationReference !== "string" || !resolution.authorizationReference.trim() || resolution.authorizationReference.length > 120 || typeof resolution.note !== "string" || !resolution.note.trim() || resolution.note.length > 240) return false;
+  const matches = returnFinanceEvidence(item).filter((entry) => entry.evidenceId === resolution.evidenceId && entry.reference === resolution.reference && Date.parse(entry.recordedAt) <= Date.parse(resolution.resolvedAt));
+  return matches.length === 1 && (!item.postedAt || Date.parse(item.postedAt) <= Date.parse(resolution.resolvedAt));
+}
+function returnStatus(item) {
+  return returnIsPosted(item) ? returnFinanciallyResolved(item) ? "completed" : "return_finance_pending" : item.status;
+}
 function availableOf(product) { return Math.max(0, product.physical - product.held - product.damaged); }
 function quoteLineDiscount(line) {
   return line.discountAmount === undefined ? { mode: "percent", value: line.discount ?? 0 } : { mode: "fixed", value: line.discountAmount };

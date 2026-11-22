@@ -1,7 +1,7 @@
 Object.assign(ACTION_ROLES, {
   "new-product": ["director", "sales_manager"], "edit-product": ["director", "sales_manager"],
   "new-supplier": ["director", "warehouse_manager"], "edit-customer": ["director", "sales_manager", "sales_staff"],
-  "opening-stock": ["warehouse_manager"], "new-purchase-request": ["warehouse_manager"],
+  "opening-stock": ["warehouse_manager"], "new-purchase-request": ["warehouse_manager"], "auto-purchase-request": ["warehouse_manager"],
   "create-po": ["warehouse_manager"], "create-receipt": ["warehouse_manager", "warehouse_staff"], "create-basic-receipt": ["warehouse_manager"],
   "redeliver-po": ["warehouse_manager", "warehouse_staff"], "record-supplier-payment": ["accountant"], "record-purchase-cost": ["accountant"],
   "create-wholesale-order": ["sales_manager", "sales_staff"], "schedule-delivery": ["sales_manager", "sales_staff", "warehouse_manager"],
@@ -98,19 +98,76 @@ function showOpeningStock() {
   });
 }
 
-function showSupplierForm() {
-  showForm("Thêm nhà cung cấp", `<div class="form-grid">${inputField("name", "Tên nhà cung cấp", "text", "", "required maxlength=160")}${inputField("contact", "Người liên hệ", "text", "", "required")}${inputField("phone", "Điện thoại", "tel", "", "required")}${inputField("email", "Email", "email")}${inputField("tax", "Mã số thuế")}${inputField("address", "Địa chỉ")}${inputField("terms", "Điều khoản thanh toán")}</div>`, (data) => {
-    const name = data.get("name").trim();
-    if (!name || state.suppliers.some((supplier) => supplier.name.toLowerCase() === name.toLowerCase())) return formError("Tên nhà cung cấp trống hoặc đã tồn tại.");
-    const supplier = { id: nextCode(state.suppliers, "id", "NCC-", 3), ...Object.fromEntries(["contact", "phone", "email", "tax", "address", "terms"].map((key) => [key, data.get(key).trim()])), name, skus: 0, lastDelivery: "—", note: "" };
-    state.suppliers.push(supplier); addAudit("Thêm nhà cung cấp", supplier.id, name);
-    closeDialog(); render(true); toast("Đã thêm nhà cung cấp.");
+function showSupplierForm(id) {
+  const supplier = id ? state.suppliers.find((item) => item.id === id) : null;
+  const action = id ? "edit-supplier" : "new-supplier";
+  if (!guardAction(action) || (id && !supplier)) return;
+  const values = supplier || {};
+  showForm(supplier ? "Sửa thông tin nhà cung cấp" : "Thêm nhà cung cấp", `<div class="form-grid">${inputField("name", "Tên nhà cung cấp", "text", values.name || "", "required maxlength=160")}${inputField("contact", "Người liên hệ", "text", values.contact || "", "required")}${inputField("phone", "Điện thoại", "tel", values.phone || "", "required")}${inputField("email", "Email", "email", values.email || "", "required")}${inputField("tax", "Mã số thuế", "text", values.tax || "", "required")}${inputField("address", "Địa chỉ", "text", values.address || "", "required")}${inputField("terms", "Điều khoản thanh toán", "text", values.terms || "", "required")}</div>`, (data) => {
+    if (!guardAction(action) || (supplier && !state.suppliers.includes(supplier))) return formError("Hồ sơ nhà cung cấp đã thay đổi. Mở lại trước khi lưu.");
+    const fields = Object.fromEntries(["name", "contact", "phone", "email", "tax", "address", "terms"].map((key) => [key, String(data.get(key) ?? "").trim()]));
+    if (!fields.name) return formError("Nhập tên nhà cung cấp.");
+    if (state.suppliers.some((item) => item !== supplier && item.name.trim().toLowerCase() === fields.name.toLowerCase())) return formError("Tên nhà cung cấp đã tồn tại.");
+    if (!/^\d{10}(?:\d{3})?$/.test(fields.tax)) return formError("Mã số thuế gồm 10 hoặc 13 chữ số.");
+    if (state.suppliers.some((item) => item !== supplier && item.tax === fields.tax)) return formError("Mã số thuế đã thuộc nhà cung cấp khác.");
+    if (!/^0\d{9,10}$/.test(fields.phone)) return formError("Số điện thoại gồm 10–11 chữ số, bắt đầu bằng 0.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email)) return formError("Email không hợp lệ.");
+    if (!fields.contact || !fields.address || !fields.terms) return formError("Nhập người liên hệ, địa chỉ và điều khoản thanh toán.");
+    const record = supplier || { id: nextCode(state.suppliers, "id", "NCC-", 3), catalog: [], skus: 0, lastDelivery: "—", note: "" };
+    Object.assign(record, fields);
+    if (!supplier) state.suppliers.push(record);
+    addAudit(supplier ? "Cập nhật nhà cung cấp" : "Thêm nhà cung cấp", record.id, fields.name);
+    closeDialog(); render(true); toast(supplier ? "Đã cập nhật nhà cung cấp." : "Đã thêm nhà cung cấp.");
   });
 }
 
-function lineEditorRow(index, purchase = false) {
+function supplierSupplyCatalog(supplier) {
+  if (!supplier) return [];
+  const rows = new Map((supplier.catalog || []).map((entry) => [entry.sku, { ...entry, source: "Danh mục nhà cung cấp" }]));
+  const orders = state.purchaseOrders.filter((order) => order.supplier === supplier.id).sort((a, b) => {
+    const date = (order) => order.createdAt ? Date.parse(isoDate(order.createdAt)) || 0 : 0;
+    return date(b) - date(a) || b.code.localeCompare(a.code, undefined, { numeric: true });
+  });
+  for (const order of orders) {
+    for (const line of order.lines) {
+      if (!rows.has(line.sku) && Number.isSafeInteger(line.price) && line.price > 0) rows.set(line.sku, { sku: line.sku, price: line.price, leadDays: null, updatedAt: order.createdAt, source: "Theo lần mua gần nhất" });
+    }
+  }
+  return [...rows.values()];
+}
+
+function showSupplierCatalogForm(id) {
+  const supplier = state.suppliers.find((item) => item.id === id);
+  if (!guardAction("supplier-catalog") || !supplier) return;
+  if (!state.products.length) return toast("Thêm sản phẩm trước khi gắn vào danh mục cung ứng.", "info");
+  let selectedSku;
+  showForm("Gắn sản phẩm", `${selectField("sku", "Sản phẩm", state.products.map((product) => [product.sku, `${product.sku} · ${product.name}`]))}<div class="form-grid">${inputField("price", "Giá nhập tham chiếu (VND)", "number", "", "required min=1 step=1")}${inputField("leadDays", "Giao dự kiến (ngày)", "number", "", "required min=0 max=365 step=1")}</div>`, (data) => {
+    if (!guardAction("supplier-catalog") || !state.suppliers.includes(supplier)) return formError("Hồ sơ nhà cung cấp đã thay đổi. Mở lại trước khi lưu.");
+    const sku = data.get("sku"), price = Number(data.get("price")), leadDays = Number(data.get("leadDays"));
+    if (!productBySku(sku)) return formError("Chọn sản phẩm đang có trong danh mục.");
+    if (!String(data.get("price") ?? "").trim() || !Number.isSafeInteger(price) || price <= 0) return formError("Giá nhập tham chiếu phải là số nguyên dương trong giới hạn xử lý.");
+    if (!String(data.get("leadDays") ?? "").trim() || !Number.isInteger(leadDays) || leadDays < 0 || leadDays > 365) return formError("Giao dự kiến phải là số nguyên từ 0 đến 365 ngày.");
+    const entry = { sku, price, leadDays, updatedAt: new Date().toISOString() };
+    supplier.catalog ||= [];
+    const index = supplier.catalog.findIndex((item) => item.sku === sku);
+    if (index < 0) supplier.catalog.push(entry);
+    else supplier.catalog[index] = entry;
+    addAudit("Cập nhật danh mục cung ứng", supplier.id, `${sku} · ${money(price)} · ${leadDays} ngày`);
+    closeDialog(); render(true); showSecondaryDetails("supplier", supplier.id); toast("Đã cập nhật danh mục cung ứng.");
+  }, { subtitle: supplier.name, input: () => {
+    const form = document.getElementById("action-form");
+    const sku = form.elements.sku.value;
+    if (selectedSku === sku) return;
+    selectedSku = sku;
+    const row = supplierSupplyCatalog(supplier).find((entry) => entry.sku === sku);
+    form.elements.price.value = row?.price ?? "";
+    form.elements.leadDays.value = row?.leadDays ?? "";
+  } });
+}
+
+function lineEditorRow(index, purchase = false, values = {}) {
   const products = state.products.filter((product) => product.status === "product_active");
-  return `<div class="cart-row" data-cart-row><div class="field"><label for="cart-sku-${index}">Sản phẩm</label><select class="select" name="cartSku" id="cart-sku-${index}">${products.map((product) => `<option value="${product.sku}">${escapeHtml(product.name)} · ${product.unit}</option>`).join("")}</select></div><div class="field"><label for="cart-qty-${index}">Số lượng</label><input class="input" id="cart-qty-${index}" name="cartQty" type="number" min="1" step="1" value="1" required></div>${purchase ? `<div class="field"><label for="cart-price-${index}">Giá mua (VND)</label><input class="input" id="cart-price-${index}" name="cartPrice" type="number" min="1" step="1" required></div>` : ""}<button type="button" class="icon-btn" data-action="remove-cart-row" aria-label="Xóa dòng">${icon("trash")}</button></div>`;
+  return `<div class="cart-row" data-cart-row><div class="field"><label for="cart-sku-${index}">Sản phẩm</label><select class="select" name="cartSku" id="cart-sku-${index}">${products.map((product) => `<option value="${product.sku}" ${product.sku === values.sku ? "selected" : ""}>${escapeHtml(product.name)} · ${product.unit}</option>`).join("")}</select></div><div class="field"><label for="cart-qty-${index}">Số lượng</label><input class="input" id="cart-qty-${index}" name="cartQty" type="number" min="1" step="1" value="${values.qty ?? 1}" required></div>${purchase ? `<div class="field"><label for="cart-price-${index}">Giá mua (VND)</label><input class="input" id="cart-price-${index}" name="cartPrice" type="number" min="1" step="1" value="${values.price ?? ""}" required></div>` : ""}<button type="button" class="icon-btn" data-action="remove-cart-row" aria-label="Xóa dòng">${icon("trash")}</button></div>`;
 }
 
 function readCart(data, purchase = false) {
@@ -165,9 +222,33 @@ async function savePurchaseEvidence(file, reference, stillCurrent) {
   throw new Error("Hồ sơ đã thay đổi trong lúc lưu chứng từ. Mở lại hồ sơ và thử lại.");
 }
 
-function showPurchaseRequestForm() {
+function minimumStockProposal() {
+  const deficient = state.products.filter((product) => product.status === "product_active" && availableOf(product) < product.min);
+  const groups = state.suppliers.map((supplier) => {
+    const catalog = supplierSupplyCatalog(supplier);
+    const lines = deficient.flatMap((product) => {
+      const supply = catalog.find((item) => item.sku === product.sku);
+      return supply ? [{ sku: product.sku, qty: product.min - availableOf(product), price: supply.price }] : [];
+    });
+    return { supplier: supplier.id, lines };
+  });
+  groups.sort((a, b) => b.lines.length - a.lines.length);
+  return { deficient, group: groups[0] };
+}
+
+function showPurchaseRequestForm(automatic = false) {
+  if (!guardAction("new-purchase-request") || (automatic && !guardAction("auto-purchase-request"))) return;
+  const proposal = automatic ? minimumStockProposal() : null;
+  if (automatic && !proposal.deficient.length) return toast("Không có sản phẩm dưới định mức tồn tối thiểu.", "info");
   if (!state.products.length || !state.suppliers.length) return toast("Thêm sản phẩm và nhà cung cấp trước khi lập yêu cầu mua.", "info");
-  showForm("Lập yêu cầu mua hàng", `<div class="form-grid">${selectField("supplier", "Nhà cung cấp", state.suppliers.map((supplier) => [supplier.id, supplier.name]))}${inputField("needed", "Ngày cần hàng", "date", isoDate(todayText()), "required")}${inputField("note", "Lý do mua hàng", "text", "", "required")}${purchaseEvidenceField("Báo giá của nhà cung cấp")}</div><div class="section-heading mt-24"><h3>Chi tiết đề xuất</h3><button type="button" class="btn btn-secondary btn-sm" data-action="add-cart-row" data-purchase="true">Thêm dòng</button></div><div id="cart-lines">${lineEditorRow(0, true)}</div><div class="banner info mt-16" id="cart-summary"></div>`, async (data) => {
+  if (automatic && !proposal.group?.lines.length) return toast("Chưa có danh mục cung ứng cho các sản phẩm dưới định mức. Bổ sung nhà cung cấp và giá tham khảo trước khi đề xuất.", "warning");
+  const suggested = proposal?.group;
+  const banner = automatic ? `<div class="banner info mb-16">Đề xuất theo tồn khả dụng dưới định mức tối thiểu. Nhà cung cấp được chọn đáp ứng nhiều SKU thiếu nhất: ${suggested.lines.length}/${proposal.deficient.length} SKU. Số lượng = định mức − khả dụng; đơn giá là giá tham khảo. Kiểm tra, chỉnh sửa và đính kèm báo giá trước khi tự gửi phê duyệt; hệ thống không tự gửi.</div>` : "";
+  showForm(automatic ? "Đề xuất nhập hàng từ tồn tối thiểu" : "Lập yêu cầu mua hàng", `${banner}<div class="form-grid">${selectField("supplier", "Nhà cung cấp", state.suppliers.map((supplier) => [supplier.id, supplier.name]), suggested?.supplier)}${inputField("needed", "Ngày cần hàng", "date", isoDate(todayText()), "required")}${inputField("note", "Lý do mua hàng", "text", automatic ? "Bổ sung hàng dưới định mức tồn tối thiểu" : "", "required")}${purchaseEvidenceField("Báo giá của nhà cung cấp")}</div><div class="section-heading mt-24"><h3>Chi tiết đề xuất</h3><button type="button" class="btn btn-secondary btn-sm" data-action="add-cart-row" data-purchase="true">Thêm dòng</button></div><div id="cart-lines">${suggested ? suggested.lines.map((line, index) => lineEditorRow(index, true, line)).join("") : lineEditorRow(0, true)}</div><div class="banner info mt-16" id="cart-summary"></div>`, async (data) => {
+    const needed = String(data.get("needed") || "");
+    if (needed < isoDate(todayText())) return formError("Ngày cần hàng không được trước hôm nay.");
+    const parsedNeeded = new Date(`${needed}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(needed) || !Number.isFinite(+parsedNeeded) || parsedNeeded.toISOString().slice(0, 10) !== needed) return formError("Nhập ngày cần hàng hợp lệ.");
     let cart;
     try { cart = readCart(data, true); } catch (error) { return formError(error.message); }
     const supplier = data.get("supplier"), file = data.get("evidence"), note = data.get("note").trim();
@@ -176,18 +257,19 @@ function showPurchaseRequestForm() {
     if (!guardAction("new-purchase-request") || !note || !state.suppliers.some((item) => item.id === supplier) || !Number.isSafeInteger(amount)) return formError("Kiểm tra nhà cung cấp, lý do mua và tổng giá trị đề xuất.");
     const code = nextCode(state.purchaseRequests, "code", `YCM-${new Date().getFullYear()}-`);
     const dialog = activeDialog;
-    const attachment = await savePurchaseEvidence(file, code, () => activeDialog === dialog && guardAction("new-purchase-request") && !state.purchaseRequests.some((item) => item.code === code));
-    const request = { code, supplier, requester: currentUser().name, createdAt: todayText(), needed: displayDate(data.get("needed")), status: "pending", amount, lines: cart, note, quoteAttachmentId: attachment.id, approvals: { accountant: false, director: false } };
+    const attachment = await savePurchaseEvidence(file, code, () => activeDialog === dialog && guardAction("new-purchase-request") && needed >= isoDate(todayText()) && state.suppliers.some((item) => item.id === supplier) && cart.every((line) => productBySku(line.sku)?.status === "product_active") && !state.purchaseRequests.some((item) => item.code === code));
+    const request = { code, supplier, requester: currentUser().name, createdAt: todayText(), needed: displayDate(needed), status: "pending", amount, lines: cart, note, quoteAttachmentId: attachment.id, approvals: { accountant: false, director: false } };
     state.purchaseRequests.unshift(request);
     ["accountant", "director"].forEach((role) => state.approvals.unshift({ id: nextCode(state.approvals, "id", "AP-", 4), type: "purchase", ref: request.code, title: role === "accountant" ? "Kiểm tra tài chính mua hàng" : "Phê duyệt yêu cầu mua", assignee: role, status: "pending", createdAt: nowStamp(), age: "Vừa gửi", requester: currentUser().name, amount: request.amount, summary: request.note, lines: structuredClone(cart), evidence: [attachment.name] }));
     addAudit("Gửi duyệt yêu cầu mua", request.code, money(request.amount));
     closeDialog(); render(true); toast("Đã gửi yêu cầu đến Kế toán và Giám đốc.");
   }, { drawer: false, submitLabel: "Gửi phê duyệt", input: () => updateCartSummary() });
   document.getElementById("action-form").dataset.purchase = "true";
+  updateCartSummary();
 }
 
 function showPurchaseOrderForm(code) {
-  const available = (request) => request?.status === "approved" && !state.purchaseOrders.some((order) => order.request === request.code);
+  const available = (request) => request && purchaseRequestEligible(request) && !state.purchaseOrders.some((order) => order.request === request.code);
   const requests = state.purchaseRequests.filter(available);
   if (!requests.length) return toast("Chưa có yêu cầu đủ hai phê duyệt và chưa lập đơn đặt hàng.", "info");
   showForm("Lập đơn đặt hàng", `${selectField("request", "Yêu cầu mua đã duyệt", requests.map((request) => [request.code, `${request.code} · ${supplierName(request.supplier)}`]), code)}${inputField("receiveDate", "Ngày nhận dự kiến", "date", isoDate(todayText()), "required")}${inputField("terms", "Điều khoản thanh toán", "text", "", "required")}`, (data) => {
@@ -488,6 +570,10 @@ function validateRestoredData(data) {
   walk(data);
   const skus = new Set(data.products.map((product) => product.sku));
   if (skus.size !== data.products.length || data.products.some((product) => !/^[A-Za-z0-9_-]{1,40}$/.test(product.sku) || typeof product.name !== "string")) throw new Error("Danh mục SKU không hợp lệ hoặc trùng lặp.");
+  for (const supplier of data.suppliers) {
+    if (supplier.catalog === undefined) continue;
+    if (!Array.isArray(supplier.catalog) || supplier.catalog.some((entry) => !entry || !skus.has(entry.sku) || !Number.isSafeInteger(entry.price) || entry.price <= 0 || !Number.isSafeInteger(entry.leadDays) || entry.leadDays < 0 || entry.leadDays > 365 || typeof entry.updatedAt !== "string" || !Number.isFinite(Date.parse(entry.updatedAt))) || new Set(supplier.catalog.map((entry) => entry.sku)).size !== supplier.catalog.length) throw new Error("Danh mục cung ứng nhà cung cấp không hợp lệ.");
+  }
   for (const key of ["orders", "quotes", "contracts"]) {
     if (data[key].some((item) => !Array.isArray(item.lines) || item.lines.some((line) => !skus.has(line.sku)) || !data.customers.some((customer) => customer.id === item.customerId))) throw new Error("Liên kết sản phẩm / khách hàng không hợp lệ.");
   }
@@ -516,6 +602,16 @@ function validateRestoredData(data) {
     }
   }
   if (data.receipts.some((item) => !Array.isArray(item.lines) || !Array.isArray(item.evidence) || (item.costAdjustment && !Number.isSafeInteger(item.costAdjustment.delta)))) throw new Error("Hồ sơ tiếp nhận không hợp lệ.");
+  if (data.receipts.some((item) => item.varianceNote !== undefined && (typeof item.varianceNote !== "string" || item.varianceNote.length > 1000))) throw new Error("Loại và nguyên nhân sai lệch không hợp lệ.");
+  for (const item of data.returns) {
+    const resolution = item.financialResolution;
+    if (resolution === undefined) continue;
+    if (!resolution || typeof resolution !== "object") throw new Error("Kết quả xử lý tài chính đổi trả không hợp lệ.");
+    const evidence = Array.isArray(item.resolutionEvidence) ? item.resolutionEvidence.filter((entry) => entry.track === "finance" && entry.evidenceId === resolution.evidenceId && entry.reference === resolution.reference && entry.actorId === resolution.actorId && entry.actorRole === "accountant") : [];
+    const file = data.attachments?.[resolution.evidenceId];
+    const resolvedAt = Date.parse(resolution.resolvedAt);
+    if (resolution.status !== "resolved" || resolution.authorized !== true || resolution.verified !== true || resolution.actorRole !== "accountant" || !data.users.some((user) => user.id === resolution.actorId) || typeof resolution.authorizationReference !== "string" || !resolution.authorizationReference.trim() || resolution.authorizationReference.length > 120 || typeof resolution.note !== "string" || !resolution.note.trim() || resolution.note.length > 240 || typeof resolution.reference !== "string" || !resolution.reference.trim() || resolution.reference.length > 120 || !Number.isFinite(resolvedAt) || !evidence || evidence.length !== 1 || !Number.isFinite(Date.parse(evidence[0].recordedAt)) || Date.parse(evidence[0].recordedAt) > resolvedAt || (item.postedAt && Date.parse(item.postedAt) > resolvedAt) || !file || file.reference !== item.code || !(file.size > 0) || typeof file.content !== "string" || !file.content) throw new Error("Kết quả xử lý tài chính đổi trả không hợp lệ.");
+  }
   if (data.stocktakes.some((item) => !Array.isArray(item.lines))) throw new Error("Hồ sơ kiểm kê không hợp lệ.");
   const rules = data.settings.rules;
   if (rules.allowStocktakeCancellation !== undefined && typeof rules.allowStocktakeCancellation !== "boolean") throw new Error("Quy tắc hủy kỳ kiểm kê không hợp lệ.");

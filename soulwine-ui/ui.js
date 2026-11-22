@@ -15,6 +15,9 @@
   contractTab: "overview",
   stocktakeTab: "count",
   reportTab: "sales",
+  reportPeriod: "all",
+  reportChannel: "all",
+  slowMovingDays: 60,
   stocktakeVarianceOnly: false,
   draftQuote: null
 };

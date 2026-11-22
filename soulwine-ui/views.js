@@ -263,6 +263,7 @@ function approvalDetailHtml(approval) {
     <p class="small" style="line-height:1.65">${escapeHtml(approval.summary)}</p>
     ${lines ? `<div class="mt-16">${lines}</div>` : ""}
     <div class="mt-16"><div class="section-title">Chứng từ & căn cứ</div><div class="flex flex-wrap gap-8">${approval.evidence.map((file) => attachmentChip(file, approval.ref)).join("") || '<span class="hint">Không có tệp đính kèm; đối chiếu thông tin nghiệp vụ trong hồ sơ.</span>'}</div></div>
+    ${approval.type === "purchase" && state.purchaseRequests.some((request) => request.code === approval.ref) ? purchaseRequestProcessing(state.purchaseRequests.find((request) => request.code === approval.ref)) : ""}
     ${approval.status === "pending" ? `<div class="decision-box mt-16">
       <div class="flex items-center justify-between gap-12 mb-8"><strong style="font-size:12px">Quyết định phê duyệt</strong>${statusChip("pending")}</div>
       ${canDecide ? `<div class="field"><label for="decision-reason">Lý do / ghi chú (bắt buộc khi từ chối)</label><textarea class="textarea" id="decision-reason" placeholder="Nêu căn cứ hoặc hướng dẫn điều chỉnh…"></textarea><div class="error hidden" id="decision-error">${icon("alert")} Vui lòng nhập lý do trước khi từ chối.</div></div>
@@ -318,6 +319,7 @@ function receiptDefectRate(line) { return line.ordered > 0 ? (line.damaged || 0)
 
 function receiptThreshold(receipt) { return receipt.source ? null : receipt.status === "receiving" ? state.settings.rules.receiptTolerance : receipt.threshold ?? state.settings.rules.receiptTolerance; }
 function receiptCountsComplete(receipt) { return receipt.lines.every((line) => line.counted && [line.received, line.good, line.damaged].every((value) => Number.isSafeInteger(value) && value >= 0)); }
+function receiptHasVariance(receipt) { return !receipt.source && receipt.lines.some((line) => (Number.isSafeInteger(line.received) && line.received !== line.ordered) || line.damaged > 0); }
 function purchaseCostReceipt(order) {
   const receipt = order.status === "completed" && receiptByCode(order.receipt);
   return receipt && receipt.po === order.code && !receipt.source && receipt.status === "completed" && receipt.lines.some((line) => line.received !== line.ordered || line.damaged > 0) ? receipt : null;
@@ -327,6 +329,7 @@ function receiptAssessment(receipt) {
   if (receipt.po && receipt.status === "completed") return '<div class="banner success">Đã xác nhận nhập kho theo kết quả kiểm đếm trên phiếu.</div>';
   if (!receiptCountsComplete(receipt)) return '<div class="banner info">Nhập đủ số lượng thực nhận, hàng đạt và hư hỏng của từng dòng để đối chiếu.</div>';
   if (receipt.lines.some((line) => line.good + line.damaged !== line.received)) return '<div class="banner danger">Tổng hàng đạt + hư hỏng phải bằng số thực nhận ở từng dòng.</div>';
+  if (receiptHasVariance(receipt) && !String(receipt.varianceNote || "").trim()) return '<div class="banner warning" role="alert">Ghi loại và nguyên nhân sai lệch trước khi xác nhận kết quả.</div>';
   if (!receipt.source && receiptThreshold(receipt) === null) return '<div class="banner warning">Chưa thiết lập ngưỡng sai lệch tiếp nhận.<a class="banner-link" href="#/settings">Mở cấu hình</a></div>';
   if (!receipt.evidence.length) return '<div class="banner warning">Đính kèm phiếu giao hoặc biên bản kiểm đếm trước khi xác nhận kết quả.</div>';
   if (receipt.source) return `<div class="banner info"><strong>Kết quả đối chiếu chứng từ:</strong> ${escapeHtml(receipt.note)}</div>`;
@@ -440,6 +443,7 @@ function viewReceiptDetail(code) {
          actions: editable || !receipt.po ? `<button class="btn btn-secondary btn-sm" data-action="upload-evidence" data-code="${escapeHtml(receipt.code)}">${icon("upload")} Tải lên</button>` : "",
         body: `<div class="flex flex-wrap gap-8">${receipt.evidence.map((file) => attachmentChip(file, receipt.code)).join("") || '<p class="hint">Chưa có chứng từ đính kèm.</p>'}</div><div class="hint mt-8">PDF/JPG/PNG tối đa 2 MB mỗi tệp. Tệp gốc được lưu trên trình duyệt hiện tại.</div>`
       })}
+      ${!receipt.source ? card({ title: "Loại và nguyên nhân sai lệch", iconName: "clipboard", body: `<div class="field"><label for="receipt-variance-note">Loại và nguyên nhân sai lệch</label><textarea class="textarea" id="receipt-variance-note" maxlength="1000" data-rc-field="varianceNote" data-code="${escapeHtml(receipt.code)}" ${editable && ["warehouse_manager", "warehouse_staff"].includes(state.role) ? "" : "disabled"}>${escapeHtml(receipt.varianceNote || "")}</textarea><p class="hint">Bắt buộc khi có chênh lệch thực nhận so với đặt hàng hoặc có hàng hư hỏng, kể cả trong ngưỡng cho phép và khi trả lô.</p></div>` }) : ""}
     </div>
     <div class="stack">
       ${card({
@@ -764,6 +768,21 @@ function viewProducts() {
   </div>`;
 }
 
+function salesReportView(sales) {
+  return `<div class="card-body"><div class="stat-grid mb-24">${[["Giá trị đơn hoàn tất", money(sales.total)], ["Đơn hoàn tất", sales.orders.length], ["Giá trị đơn trung bình", sales.orders.length ? money(Math.round(sales.total / sales.orders.length)) : "—"], ["Báo giá được xác nhận", sales.quotes.filter((quote) => quote.confirmed).length]].map(([label, value]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("")}</div>
+    <p class="hint mb-24">Đơn hoàn tất và báo giá theo ngày lập, hợp đồng theo ngày ký, giờ Việt Nam. Hợp đồng được tính cho người lập báo giá nguồn; tỷ lệ chốt bằng hợp đồng ký trong kỳ từ báo giá của nhân viên / số báo giá nhân viên lập trong kỳ. Giá trị sản phẩm theo giá giao dịch, không thay thế báo cáo ghi nhận doanh thu kế toán.</p>
+    <div class="grid grid-2"><div><h3 class="section-title">Xu hướng 6 tháng gần nhất · triệu đồng</h3>${sales.orders.length ? lineChart(sales.months.map((month) => month.value / 1000000), sales.months.map((month) => month.label), "reports") : emptyState("chart", "Chưa có đơn hoàn tất trong kỳ", "Chọn kỳ khác hoặc hoàn tất giao hàng để xem kết quả.")}</div><div><h3 class="section-title">Cơ cấu theo kênh</h3>${sales.channels.length ? `<div class="bar-list">${sales.channels.map(([label, value]) => `<div class="bar-row"><span class="bar-label">${escapeHtml(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${sales.total ? value / sales.total * 100 : 0}%"></div></div><span class="bar-value">${money(value)}</span></div>`).join("")}</div>` : emptyState("chart", "Chưa có dữ liệu theo kênh", "Kết quả được tính từ kênh bán của đơn đã hoàn tất.")}</div></div>
+    <div class="mt-24"><h3 class="section-title">Doanh số theo nhóm khách hàng</h3>${dataTable([{ label: "Nhóm khách hàng" }, { label: "Số đơn", align: "num" }, { label: "SL", align: "num" }, { label: "Giá trị", align: "num" }], sales.customerGroups.map((group) => ({ cells: [escapeHtml(group.label), num(group.orders), num(group.qty), money(group.value)] })), { minWidth: 600 })}</div>
+    <div class="mt-24"><h3 class="section-title">Hiệu suất nhân viên kinh doanh</h3>${dataTable([{ label: "Nhân viên" }, { label: "Báo giá đã lập", align: "num" }, { label: "Hợp đồng ký", align: "num" }, { label: "Tỷ lệ chốt", align: "num" }, { label: "Đơn hoàn tất", align: "num" }, { label: "Doanh số", align: "num" }], sales.staff.map((employee) => ({ cells: [escapeHtml(employee.name), num(employee.quotes), num(employee.signedContracts), employee.closeRate === null ? "—" : pct(employee.closeRate), num(employee.completedOrders), money(employee.sales)] })), { minWidth: 820 })}</div>
+    <div class="mt-24"><h3 class="section-title">Sản phẩm đóng góp</h3>${dataTable([{ label: "Sản phẩm" }, { label: "SL", align: "num" }, { label: "Giá trị phân bổ", align: "num" }], sales.products.map(([sku, item]) => ({ cells: [productCell(sku), num(item.qty), money(item.value)] })), { minWidth: 500 })}</div></div>`;
+}
+
+function warehouseQualityView() {
+  const quality = warehouseQuality();
+  return card({ title: "Chất lượng vận hành kho", iconName: "box", className: "mt-24", body: `<div class="stat-grid">${quality.measures.map((measure) => `<div class="stat-card"><div class="stat-label">${escapeHtml(measure.label)}</div><div class="stat-value">${measure.rate === null ? "—" : pct(measure.rate)}</div><div class="hint mt-8">${num(measure.numerator)} / ${num(measure.denominator)}</div><div class="hint">${escapeHtml(measure.basis)}</div></div>`).join("")}</div>
+    <h3 class="section-title mt-24">Tỷ lệ sai lệch theo từng kỳ kiểm kê</h3>${quality.periods.length ? `<div class="bar-list">${quality.periods.map((period) => `<div class="bar-row"><span class="bar-label">${escapeHtml(period.code)}<small class="cell-sub">${escapeHtml(period.scope || "")}</small></span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, period.rate)}%"></div></div><span class="bar-value">${pct(period.rate)} · ${num(period.different)} / ${num(period.counted)}</span></div>`).join("")}</div>` : emptyState("chart", "Chưa có số kiểm đếm", "Nhập số đếm để xem tỷ lệ sai lệch.")}` });
+}
+
 function viewReports() {
   const tabs = [
     { key: "sales", label: "Báo cáo bán hàng" },
@@ -774,14 +793,12 @@ function viewReports() {
   const active = state.ui.reportTab;
   const sales = active === "sales" ? salesAnalytics() : null;
   const inventory = active === "inventory" ? inventoryReport() : null;
-  const salesContent = sales ? `<div class="card-body"><div class="stat-grid mb-24">${[["Giá trị đơn hoàn tất", money(sales.total)], ["Đơn hoàn tất", sales.orders.length], ["Giá trị đơn trung bình", sales.orders.length ? money(Math.round(sales.total / sales.orders.length)) : "—"], ["Báo giá được xác nhận", state.quotes.filter((quote) => quote.confirmed).length]].map(([label, value]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("")}</div>
-    <p class="hint mb-24">Tổng hợp từ đơn hàng Hoàn tất trong kỳ đã chọn. Giá trị sản phẩm được phân bổ theo tỷ trọng đơn giá; không thay thế báo cáo ghi nhận doanh thu kế toán.</p>
-    <div class="grid grid-2"><div><h3 class="section-title">Xu hướng 6 tháng gần nhất · triệu đồng</h3>${sales.orders.length ? lineChart(sales.months.map((month) => month.value / 1000000), sales.months.map((month) => month.label), "reports") : emptyState("chart", "Chưa có đơn hoàn tất trong kỳ", "Chọn kỳ khác hoặc hoàn tất giao hàng để xem kết quả.")}</div><div><h3 class="section-title">Cơ cấu theo kênh</h3>${sales.channels.length ? `<div class="bar-list">${sales.channels.map(([label, value]) => `<div class="bar-row"><span class="bar-label">${escapeHtml(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${value / sales.total * 100}%"></div></div><span class="bar-value">${money(value)}</span></div>`).join("")}</div>` : emptyState("chart", "Chưa có dữ liệu theo kênh", "Kết quả được tính từ kênh bán của đơn đã hoàn tất.")}</div></div>
-    <div class="grid grid-2 mt-24"><div><h3 class="section-title">Kết quả theo nhân sự</h3>${dataTable([{ label: "Phụ trách" }, { label: "Giá trị đơn hoàn tất", align: "num" }], sales.people.map(([name, value]) => ({ cells: [escapeHtml(name), money(value)] })), { minWidth: 420 })}</div><div><h3 class="section-title">Sản phẩm đóng góp</h3>${dataTable([{ label: "Sản phẩm" }, { label: "SL", align: "num" }, { label: "Giá trị phân bổ", align: "num" }], sales.products.map(([sku, item]) => ({ cells: [productCell(sku), num(item.qty), money(item.value)] })), { minWidth: 500 })}</div></div></div>` : "";
+  const salesContent = sales ? salesReportView(sales) : "";
   const managementContent = active === "management" ? `<div class="card-body">
     ${metricCards()}
+    ${warehouseQualityView()}
     <div class="grid grid-2 mt-16">
-      ${card({ title: "Tiến độ hợp đồng", iconName: "file-check", body: `<div class="bar-list">${state.contracts.filter((contract) => contract.status === "active").map((contract) => { const total = contract.lines.reduce((sum, line) => sum + line.qty, 0); const delivered = contract.shipments.filter((shipment) => shipment.status === "delivered").reduce((sum, shipment) => sum + shipment.items.reduce((inner, item) => inner + item.qty, 0), 0); const percent = total ? Math.round(delivered / total * 100) : 0; return `<div class="bar-row"><span class="bar-label">${escapeHtml(contract.code)}</span><div class="bar-track"><div class="bar-fill" style="width:${percent}%"></div></div><span class="bar-value">${percent}%</span></div>`; }).join("")}</div>` })}
+      ${card({ title: "Tiến độ hợp đồng", iconName: "file-check", body: `<div class="bar-list">${state.contracts.filter((contract) => contract.status === "active").map((contract) => { const total = contract.lines.reduce((sum, line) => sum + line.qty, 0); const delivered = contract.lines.reduce((sum, line) => sum + Math.min(line.qty, deliveredContractQty(contract, line.sku)), 0); const percent = total ? Math.round(delivered / total * 100) : 0; return `<div class="bar-row"><span class="bar-label">${escapeHtml(contract.code)}</span><div class="bar-track"><div class="bar-fill" style="width:${percent}%"></div></div><span class="bar-value">${percent}%</span></div>`; }).join("")}</div>` })}
       ${card({ title: "Công nợ phải thu", iconName: "card", body: `<div class="bar-list">${arRecords().map((record) => `<div class="bar-row"><span class="bar-label">${escapeHtml(record.id)} · ${escapeHtml(customerName(record.customerId))}</span><div class="bar-track"><div class="bar-fill ${arStatusKey(record) === "overdue" ? "" : "success"}" style="width:${Math.min(100, Math.round(record.remaining / Math.max(record.total, 1) * 100))}%;${arStatusKey(record) === "overdue" ? "background:var(--danger)" : ""}"></div></div><span class="bar-value">${money(record.remaining)}</span></div>`).join("")}</div>` })}
     </div>
   </div>` : "";
@@ -789,12 +806,41 @@ function viewReports() {
   return `${pageHead({
     title: "Báo cáo & phân tích",
     subtitle: "Doanh thu, hiệu suất, nhập - xuất - tồn và các chỉ số vận hành K01–K06.",
-    actions: inventory ? reportExportActions("export-inventory", inventory.rows.length > 0) : `${active === "sales" ? `<select class="select-sm" data-report-period aria-label="Kỳ báo cáo"><option value="all" ${state.ui.reportPeriod === "all" || !state.ui.reportPeriod ? "selected" : ""}>Toàn bộ thời gian</option><option value="month" ${state.ui.reportPeriod === "month" ? "selected" : ""}>Tháng hiện tại</option><option value="quarter" ${state.ui.reportPeriod === "quarter" ? "selected" : ""}>Quý hiện tại</option></select>` : ""}<button class="btn btn-secondary" data-action="export-report">${icon("download")} Xuất CSV</button>`
+    actions: inventory ? reportExportActions("export-inventory", inventory.rows.length > 0) : `${active === "sales" ? `<select class="select-sm" data-report-period aria-label="Kỳ báo cáo">${[["all", "Toàn bộ thời gian"], ["today", "Hôm nay"], ["week", "Tuần này"], ["month", "Tháng hiện tại"], ["quarter", "Quý hiện tại"]].map(([value, label]) => `<option value="${value}" ${(state.ui.reportPeriod || "all") === value ? "selected" : ""}>${label}</option>`).join("")}</select><select class="select-sm" data-report-channel aria-label="Kênh bán">${[["all", "Tất cả kênh"], ["retail", "Bán lẻ"], ["wholesale", "Bán sỉ"]].map(([value, label]) => `<option value="${value}" ${(state.ui.reportChannel || "all") === value ? "selected" : ""}>${label}</option>`).join("")}</select>` : ""}<button class="btn btn-secondary" data-action="export-report">${icon("download")} Xuất CSV</button>`
   })}
   <div class="card">
     ${tabsBar("report", tabs, active)}
     ${content}
   </div>`;
+}
+
+function auditType(entry) {
+  const object = String(entry.object || "").normalize("NFC").toUpperCase();
+  if (object.startsWith("BG-")) return "Chiết khấu bán sỉ";
+  if (object.startsWith("PAY-")) return "Thanh toán";
+  if (object.startsWith("YCM-") || object.startsWith("PO-")) return "Mua hàng";
+  if (object.startsWith("HĐ-") || object.startsWith("HD-")) return "Hợp đồng";
+  return "Khác";
+}
+
+function auditResult(entry) {
+  const action = String(entry.action || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (action.includes("tu choi")) return "Từ chối";
+  if (action.includes("phe duyet")) return "Đã duyệt";
+  return "";
+}
+
+function auditFilterError() {
+  const { from = "", to = "" } = state.ui.auditFilter || {};
+  if (from && to && from > to) return "Từ ngày không được sau đến ngày.";
+  if ((from && !validReportDay(from)) || (to && !validReportDay(to))) return "Ngày lọc không hợp lệ.";
+  return "";
+}
+
+function auditFilterSummary() {
+  const { from = "", to = "", actor = "", type = "", result = "" } = state.ui.auditFilter || {};
+  const day = (value) => value ? value.split("-").reverse().join("/") : "Không giới hạn";
+  return `Từ ngày: ${day(from)} · Đến ngày: ${day(to)} · Người duyệt: ${actor || "Tất cả"} · Loại hồ sơ: ${type || "Tất cả"} · Kết quả: ${result || "Tất cả"} · Từ khóa: ${state.ui.auditSearch.trim() || "Không giới hạn"}`;
 }
 
 function auditTableHtml(list) {
@@ -812,28 +858,51 @@ function auditTableHtml(list) {
       `<span class="mono-code">${escapeHtml(entry.object)}</span>`,
       `<span class="audit-detail">${escapeHtml(entry.detail)}</span>`
     ]
-  })), { minWidth: 900 });
+  })), { minWidth: 900, empty: emptyState("clock", "Không có bản ghi phù hợp", "Điều chỉnh hoặc xóa bộ lọc để xem nhật ký.") });
 }
 
 function filteredAudit() {
+  if (auditFilterError()) return [];
+  const { from = "", to = "", actor = "", type = "", result = "" } = state.ui.auditFilter || {};
   const search = state.ui.auditSearch.trim().toLowerCase();
-  if (!search) return state.audit;
-  return state.audit.filter((entry) => `${entry.actor} ${entry.action} ${entry.object} ${entry.detail}`.toLowerCase().includes(search));
+  return state.audit.filter((entry) => {
+    const day = from || to ? inventoryMoveDay(entry) : "";
+    return (!from || (day && day >= from)) && (!to || (day && day <= to))
+      && (!actor || entry.actor === actor) && (!type || auditType(entry) === type)
+      && (!result || auditResult(entry) === result)
+      && (!search || `${entry.actor} ${entry.action} ${entry.object} ${entry.detail}`.toLowerCase().includes(search));
+  });
 }
 
 function viewAudit() {
   const list = filteredAudit();
+  const { from = "", to = "", actor = "", type = "", result = "" } = state.ui.auditFilter || {};
+  const error = auditFilterError();
+  const actors = [...new Set(state.audit.map((entry) => entry.actor).filter(Boolean))].sort((a, b) => a.localeCompare(b, "vi"));
+  const options = (values, selected) => values.map((value) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
   return `${pageHead({
     title: "Lịch sử xử lý & phê duyệt",
     subtitle: "Nhật ký kiểm toán của mọi thao tác gửi duyệt, xác nhận, từ chối, hủy chứng từ.",
-    actions: canExportApprovalHistory() ? reportExportActions("export-audit") : ""
+    actions: canExportApprovalHistory() ? reportExportActions("export-audit", list.length > 0 && !error) : ""
   })}
   <div class="card">
+    <div class="card-body">
+      <div class="form-grid three">
+        <div class="field"><label for="audit-from">Từ ngày</label><input class="input" id="audit-from" type="date" value="${escapeHtml(from)}" data-audit-filter="from" ${error ? 'aria-invalid="true" aria-describedby="audit-filter-error"' : ""}></div>
+        <div class="field"><label for="audit-to">Đến ngày</label><input class="input" id="audit-to" type="date" value="${escapeHtml(to)}" data-audit-filter="to" ${error ? 'aria-invalid="true" aria-describedby="audit-filter-error"' : ""}></div>
+        <div class="field"><label for="audit-actor">Người duyệt</label><select class="select" id="audit-actor" data-audit-filter="actor"><option value="">Tất cả</option>${options(actors, actor)}</select></div>
+        <div class="field"><label for="audit-type">Loại hồ sơ</label><select class="select" id="audit-type" data-audit-filter="type"><option value="">Tất cả</option>${options(["Chiết khấu bán sỉ", "Thanh toán", "Mua hàng", "Hợp đồng", "Khác"], type)}</select></div>
+        <div class="field"><label for="audit-result">Kết quả</label><select class="select" id="audit-result" data-audit-filter="result"><option value="">Tất cả</option>${options(["Đã duyệt", "Từ chối"], result)}</select></div>
+        <div class="field"><label>&nbsp;</label><button type="button" class="btn btn-secondary" data-audit-reset>Xóa bộ lọc</button></div>
+      </div>
+      ${error ? `<p class="hint mt-16" id="audit-filter-error" role="alert">${escapeHtml(error)}</p>` : ""}
+      <p class="hint mt-16" aria-live="polite">Bộ lọc đang áp dụng cho bảng và tệp xuất: ${escapeHtml(auditFilterSummary())}</p>
+    </div>
     <div class="table-toolbar">
       <div class="toolbar-left">
-        <div class="search-box">${icon("search")}<input type="search" placeholder="Tìm người thực hiện, hành động, đối tượng…" value="${escapeHtml(state.ui.auditSearch)}" data-list-search="audit" data-list-target="audit-table"></div>
+        <div class="search-box">${icon("search")}<input type="search" aria-label="Tìm kiếm nhật ký" placeholder="Tìm người thực hiện, hành động, đối tượng…" value="${escapeHtml(state.ui.auditSearch)}" data-list-search="audit" data-list-target="audit-table"></div>
       </div>
-      <div class="toolbar-right"><span class="muted small">${list.length} bản ghi</span></div>
+      <div class="toolbar-right"><span class="muted small" aria-live="polite">${list.length} bản ghi</span></div>
     </div>
     <div id="audit-table">${auditTableHtml(list)}</div>
     <div class="table-footer"><span>Mọi thao tác phê duyệt đều lưu người thực hiện, thời điểm, đối tượng và trạng thái trước/sau.</span><span>Không thể sửa nhật ký</span></div>
@@ -846,9 +915,9 @@ function viewSuppliers() {
       `<div class="cell-main"><span class="strong">${escapeHtml(supplier.name)}</span><span class="cell-sub">${escapeHtml(supplier.id)} · ${escapeHtml(supplier.tax)}</span></div>`,
       `<div class="cell-main"><span>${escapeHtml(supplier.contact)}</span><span class="cell-sub">${escapeHtml(supplier.phone)}</span></div>`,
       `<span>${escapeHtml(supplier.terms)}</span>`,
-      `<span class="num">${state.products.filter((product) => product.supplier === supplier.id).length}</span>`,
+      `<span class="num">${supplierSupplyCatalog(supplier).length}</span>`,
       `<span>${escapeHtml(supplier.lastDelivery)}</span>`,
-      `<button class="btn btn-ghost btn-sm" data-action="open-supplier" data-id="${escapeHtml(supplier.id)}">${icon("eye")}</button>`
+      `<div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="open-supplier" data-id="${escapeHtml(supplier.id)}" aria-label="Xem hồ sơ nhà cung cấp">${icon("eye")}</button>${ACTION_ROLES["edit-supplier"].includes(state.role) ? `<button class="btn btn-secondary btn-sm" data-action="edit-supplier" data-id="${escapeHtml(supplier.id)}">Sửa</button>` : ""}</div>`
     ]
   }));
   return `${pageHead({
@@ -869,6 +938,61 @@ function viewSuppliers() {
   </div>`;
 }
 
+function purchaseRequestDecision(request, role) {
+  const approval = state.approvals.find((item) => item.type === "purchase" && item.ref === request.code && item.assignee === role);
+  const status = approval ? approval.status : request.approvals?.[role] ? "approved" : "pending";
+  return { approval, status, label: status === "approved" ? role === "accountant" ? "Đã xác nhận" : "Đã phê duyệt" : status === "rejected" ? "Từ chối" : "Chờ xử lý" };
+}
+
+function purchaseRequestEligible(request) {
+  return request.status !== "rejected" && ["accountant", "director"].every((role) => purchaseRequestDecision(request, role).status === "approved");
+}
+
+function purchaseRequestOrdering(request) {
+  const order = state.purchaseOrders.find((item) => item.request === request.code);
+  if (order) return order.code;
+  if (request.status === "rejected" || ["accountant", "director"].some((role) => purchaseRequestDecision(request, role).status === "rejected")) return "Không đặt hàng";
+  return purchaseRequestEligible(request) ? "Đủ điều kiện đặt hàng" : "Chờ đủ xác nhận";
+}
+
+function purchaseRequestProcessing(request) {
+  const order = state.purchaseOrders.find((item) => item.request === request.code);
+  return `<section class="mt-16"><h3 class="section-title">Kết quả xử lý từng bên</h3>${["accountant", "director"].map((role) => {
+    const { approval, label } = purchaseRequestDecision(request, role);
+    return `<div class="mt-12"><strong>${ROLES[role].label}: ${label}</strong><p class="small muted">Người xử lý: ${escapeHtml(approval?.decidedBy || "Chưa ghi nhận")} · Thời điểm: ${escapeHtml(approval?.decidedAt || "Chưa ghi nhận")}</p><p class="small">Ghi chú: ${escapeHtml(approval?.decisionNote || "Chưa có ghi chú")}</p></div>`;
+  }).join("")}<div class="banner info mt-16"><div><strong>Điều kiện đặt hàng: ${escapeHtml(purchaseRequestOrdering(request))}</strong><p class="small">Cần Kế toán xác nhận và Giám đốc phê duyệt. Không đặt hàng nếu một bên từ chối.</p></div></div>${!order && purchaseRequestEligible(request) && actionRoles("create-po").includes(state.role) ? `<button class="btn btn-primary mt-12" data-action="create-po" data-code="${escapeHtml(request.code)}">Lập đơn đặt hàng</button>` : ""}</section>`;
+}
+
+function supplierDetails(supplier) {
+  const catalog = supplierSupplyCatalog(supplier);
+  const receipts = state.receipts.filter((receipt) => receipt.supplier === supplier.id).sort((a, b) => (Date.parse(isoDate(b.eta)) || 0) - (Date.parse(isoDate(a.eta)) || 0) || b.code.localeCompare(a.code, undefined, { numeric: true }));
+  const refused = receipts.filter((receipt) => receipt.status === "returned" || receiptOverThreshold(receipt)).length;
+  const waiting = state.purchaseOrders.filter((order) => order.supplier === supplier.id && order.status === "returned").length;
+  const catalogTable = dataTable([
+    { label: "Sản phẩm" }, { label: "Giá nhập tham chiếu", align: "num" }, { label: "Giao dự kiến" }, { label: "Nguồn" }
+  ], catalog.map((row) => ({ cells: [productCell(row.sku), money(row.price), row.leadDays === null ? "Chưa ghi nhận" : `${row.leadDays} ngày`, escapeHtml(row.source)] })), { minWidth: 680 });
+  const history = receipts.length ? dataTable([
+    { label: "Phiếu nhận / Đơn đặt" }, { label: "Đặt", align: "num" }, { label: "Nhận", align: "num" }, { label: "Hỏng", align: "num" }, { label: "% lệch", align: "num" }, { label: "Trạng thái" }
+  ], receipts.map((receipt) => {
+    const threshold = receiptThreshold(receipt), complete = receiptCountsComplete(receipt);
+    const ordered = receipt.lines.reduce((sum, line) => sum + line.ordered, 0);
+    const received = receipt.lines.reduce((sum, line) => sum + (line.received || 0), 0);
+    const damaged = receipt.lines.reduce((sum, line) => sum + (line.damaged || 0), 0);
+    const difference = receipt.lines.reduce((sum, line) => sum + Math.abs((line.received || 0) - line.ordered), 0);
+    const variance = complete && ordered ? difference / ordered * 100 : null;
+    return { cells: [
+      `<a class="link-btn strong" href="${hrefFor("receipts", receipt.code)}">${escapeHtml(receipt.code)}</a>${receipt.po ? `<div><button class="link-btn" data-action="open-po" data-code="${escapeHtml(receipt.po)}">${escapeHtml(receipt.po)}</button></div>` : ""}<div class="cell-sub">${escapeHtml(receipt.eta)} · Ngưỡng: ${threshold === null ? "Chưa thiết lập" : pct(threshold)}</div>${receipt.previousReceipt ? `<div class="cell-sub">Giao lại sau <a class="link-btn" href="${hrefFor("receipts", receipt.previousReceipt)}">${escapeHtml(receipt.previousReceipt)}</a></div>` : ""}`,
+      num(ordered), complete ? num(received) : "Chưa đếm đủ", complete ? num(damaged) : "Chưa đếm đủ",
+      `<span class="strong" ${receiptOverThreshold(receipt) ? 'style="color:var(--danger)"' : ""}>${variance === null ? "—" : pct(variance)}</span>`, statusChip(receipt.status)
+    ] };
+  }), { minWidth: 760 }) : "";
+  return {
+    drawer: true, wide: true, title: supplier.name, subtitle: supplier.id,
+    body: `<div class="kv-grid">${[["Người liên hệ", supplier.contact], ["Điện thoại", supplier.phone], ["Email", supplier.email], ["Thanh toán", supplier.terms], ["Địa chỉ", supplier.address], ["MST", supplier.tax]].map(([label, value]) => `<div><div class="kv-label">${escapeHtml(label)}</div><div class="kv-value">${escapeHtml(value)}</div></div>`).join("")}</div><div class="divider"></div><div class="section-heading"><h3 class="section-title">Sản phẩm cung ứng &amp; giá tham chiếu</h3>${ACTION_ROLES["supplier-catalog"].includes(state.role) ? `<button class="btn btn-secondary btn-sm" data-action="supplier-catalog" data-id="${escapeHtml(supplier.id)}">Gắn sản phẩm</button>` : ""}</div>${catalogTable}<div class="divider"></div><h3 class="section-title">Lịch sử cung ứng</h3><p class="small muted mt-8">${receipts.length} lần giao · ${refused} lô vượt ngưỡng/trả lô · ${waiting} đơn chờ giao lại</p>${history || '<p class="hint mt-16">Chưa có phiếu tiếp nhận từ nhà cung cấp này.</p>'}`,
+    footer: ACTION_ROLES["edit-supplier"].includes(state.role) ? `<button class="btn btn-primary" data-action="edit-supplier" data-id="${escapeHtml(supplier.id)}">Sửa thông tin</button>` : ""
+  };
+}
+
 function viewPurchaseRequests() {
   const rows = state.purchaseRequests.map((request) => ({
     cells: [
@@ -877,14 +1001,16 @@ function viewPurchaseRequests() {
       `<span>${escapeHtml(request.requester)}</span>`,
       `<span>${escapeHtml(request.needed)}</span>`,
       `<span class="num strong">${money(request.amount)}</span>`,
-      statusChip(request.status),
+      `<span>${purchaseRequestDecision(request, "accountant").label}</span>`,
+      `<span>${purchaseRequestDecision(request, "director").label}</span>`,
+      `<span>${escapeHtml(purchaseRequestOrdering(request))}</span>`,
       `<button class="btn btn-ghost btn-sm" data-action="open-request" data-code="${escapeHtml(request.code)}">${icon("eye")}</button>`
     ]
   }));
   return `${pageHead({
     title: "Yêu cầu mua hàng",
     subtitle: "Đề xuất bổ sung hàng, luân chuyển qua Kế toán và Giám đốc trước khi đặt hàng.",
-    actions: `<button class="btn btn-secondary" data-action="export-requests">${icon("download")} Xuất danh sách</button><button class="btn btn-primary" data-action="new-purchase-request">${icon("plus")} Lập yêu cầu mua</button>`
+    actions: `<button class="btn btn-secondary" data-action="export-requests">${icon("download")} Xuất danh sách</button>${state.role === "warehouse_manager" ? `<button class="btn btn-secondary" data-action="auto-purchase-request">${icon("clipboard")} Đề xuất nhập hàng tự động</button>` : ""}<button class="btn btn-primary" data-action="new-purchase-request">${icon("plus")} Lập yêu cầu mua</button>`
   })}
   <div class="banner info mb-16">${icon("clipboard")}<div>Yêu cầu mua chỉ đủ điều kiện đặt hàng khi có cả xác nhận của Kế toán và phê duyệt của Giám đốc. Hai bên có thể xem xét độc lập.</div></div>
   <div class="card">
@@ -894,9 +1020,11 @@ function viewPurchaseRequests() {
       { label: "Người đề xuất" },
       { label: "Ngày cần hàng" },
       { label: "Giá trị dự kiến", align: "num" },
-      { label: "Trạng thái" },
+      { label: "Kế toán" },
+      { label: "Giám đốc" },
+      { label: "Đặt hàng" },
       { label: "", align: "num" }
-    ], rows, { minWidth: 900 })}
+    ], rows, { minWidth: 1200 })}
     <div class="table-footer"><span>${state.purchaseRequests.length} yêu cầu · ${state.purchaseRequests.filter((request) => request.status === "pending").length} chờ phê duyệt</span><a class="link-btn" href="#/approvals">Mở phê duyệt</a></div>
   </div>`;
 }
@@ -1003,8 +1131,10 @@ function returnDetails(item) {
   const receipt = item.receivedAt ? `<div class="mt-12"><strong>Thực nhận: ${num(item.receivedQty ?? item.qty)}</strong><div class="small">Lúc ${escapeHtml(returnDeliveryTime(item.receivedAt))}${item.receiptRecordedAt ? ` · Ghi lúc ${escapeHtml(returnDeliveryTime(item.receiptRecordedAt))}` : ""}</div><div class="small">${escapeHtml(item.receiptNote)}</div>${deliveryAttachment(item.receiptEvidenceId, "Chứng từ nhận hàng hoàn")}</div>` : "";
   const resolution = (item.resolutionEvidence || []).map((entry) => `<div class="mt-12"><strong>${entry.track === "finance" ? "Tiền / công nợ" : "Đổi bù"} · ${escapeHtml(entry.reference)}</strong><div class="small">${escapeHtml(entry.note)} · ${escapeHtml(returnDeliveryTime(entry.recordedAt))}</div>${deliveryAttachment(entry.evidenceId, "Chứng từ đối chiếu")}</div>`).join("");
   const actionButton = (action, label, style = "primary") => ACTION_ROLES[action].includes(state.role) ? `<button class="btn btn-${style}" data-action="${action}" data-code="${code}">${label}</button>` : "";
-  const footer = item.status === "inspecting" && !returnIsPosted(item) ? actionButton("return-receive", "Ghi nhận thực nhận") : item.status === "return_received" && !returnIsPosted(item) ? actionButton("return-inspection", "Kiểm tra và nhập kho") : item.status === "completed" ? actionButton("return-finance-evidence", "Lưu chứng từ tiền / công nợ", "secondary") + actionButton("return-replacement-evidence", "Lưu chứng từ đổi bù", "secondary") : "";
-  const body = `${statusChip(item.status)}<p class="small mt-12">Chuyến giao: ${escapeHtml(deliveryLabel)}${item.returnKind === "undelivered" ? " · Hàng chưa giao" : item.returnKind === "customer" ? " · Khách trả hàng" : ""}</p><div class="picker-row">${productCell(item.sku)}<strong>SL phiếu: ${num(item.qty)}</strong></div><p class="small mt-12">${escapeHtml(item.reason)} · ${escapeHtml(item.note)}</p>${item.remainderReturn ? `<p class="small">Yêu cầu gốc: ${num(item.originalRequestedQty)} · Phần chờ nhận: ${escapeHtml(item.remainderReturn)}</p>` : ""}${receipt}${item.postedAt ? `<p class="small mt-12">Đã nhập kho: ${escapeHtml(returnDeliveryTime(item.postedAt))}</p>` : ""}${condition ? `<p class="small mt-12">Phân loại: ${escapeHtml(condition)}${item.goodQty === undefined ? "" : ` · Đạt: ${num(item.goodQty)} · Lỗi: ${num(item.damagedQty)}`}</p>` : ""}${resolution}<div class="banner warning mt-16">Thực nhận không cập nhật tồn. Kho chỉ cập nhật khi xác nhận phân loại. Chứng từ tiền / đổi bù không phê duyệt hoặc tạo giao dịch.</div>`;
+  const posted = returnIsPosted(item), financiallyResolved = returnFinanciallyResolved(item);
+  const finance = financiallyResolved ? `<div class="banner success mt-16"><strong>Tài chính đã được Kế toán xác minh</strong><div>${escapeHtml(item.financialResolution.reference)} · Căn cứ: ${escapeHtml(item.financialResolution.authorizationReference)}</div><div>${escapeHtml(item.financialResolution.note)} · ${escapeHtml(returnDeliveryTime(item.financialResolution.resolvedAt))}</div></div>` : posted ? '<div class="banner warning mt-16">Đã ghi nhập kho; tiền / công nợ hoặc đổi bù còn chờ xác nhận. Lưu chứng từ không tự đóng hồ sơ.</div>' : "";
+  const footer = !posted && item.status === "inspecting" ? actionButton("return-receive", "Ghi nhận thực nhận") : !posted && item.status === "return_received" ? actionButton("return-inspection", "Kiểm tra và nhập kho") : posted ? actionButton("return-finance-evidence", "Lưu chứng từ tiền / công nợ", "secondary") + actionButton("return-replacement-evidence", "Lưu chứng từ đổi bù", "secondary") + (!financiallyResolved ? actionButton("return-finance-resolve", "Xác nhận kết quả tài chính") : "") : "";
+  const body = `${statusChip(returnStatus(item))}<p class="small mt-12">Chuyến giao: ${escapeHtml(deliveryLabel)}${item.returnKind === "undelivered" ? " · Hàng chưa giao" : item.returnKind === "customer" ? " · Khách trả hàng" : ""}</p><div class="picker-row">${productCell(item.sku)}<strong>SL phiếu: ${num(item.qty)}</strong></div><p class="small mt-12">${escapeHtml(item.reason)} · ${escapeHtml(item.note)}</p>${item.remainderReturn ? `<p class="small">Yêu cầu gốc: ${num(item.originalRequestedQty)} · Phần chờ nhận: ${escapeHtml(item.remainderReturn)}</p>` : ""}${receipt}${posted ? `<p class="small mt-12">Đã ghi nhập kho: ${item.postedAt ? escapeHtml(returnDeliveryTime(item.postedAt)) : "Hồ sơ cũ, không ghi nhập lại"}</p>` : ""}${condition ? `<p class="small mt-12">Phân loại: ${escapeHtml(condition)}${item.goodQty === undefined ? "" : ` · Đạt: ${num(item.goodQty)} · Lỗi: ${num(item.damagedQty)}`}</p>` : ""}${resolution}${finance}<div class="banner warning mt-16">Thực nhận không cập nhật tồn. Kho chỉ cập nhật khi xác nhận phân loại. Chứng từ tiền / đổi bù không phê duyệt hoặc tạo giao dịch. Chỉ hoàn tất sau xác nhận riêng của Kế toán về kết quả đã xử lý theo thẩm quyền và đã đối chiếu.</div>`;
   return { drawer: true, title: item.code, subtitle: `${item.order} · ${customerName(item.customerId)}`, body, footer };
 }
 
@@ -1050,13 +1180,13 @@ function viewReturns() {
       productCell(item.sku),
       `<span class="num">${num(item.qty)}</span><div class="cell-sub">${item.receivedAt ? `Đã nhận: ${num(item.receivedQty ?? item.qty)}` : "Chưa nhận"}</div>`,
       `<span>${escapeHtml(item.reason)}</span>`,
-      `${statusChip(item.status)}${item.status === "return_received" ? `<div class="cell-sub">${escapeHtml(returnDeliveryTime(item.receivedAt))}</div>` : ""}`,
+      `${statusChip(returnStatus(item))}${returnIsPosted(item) ? '<div class="cell-sub">Đã ghi nhập kho</div>' : item.status === "return_received" ? `<div class="cell-sub">${escapeHtml(returnDeliveryTime(item.receivedAt))}</div>` : ""}`,
       `<button class="btn btn-ghost btn-sm" data-action="open-return" data-code="${escapeHtml(item.code)}" aria-label="Xem chi tiết hàng hoàn">${icon("eye")}</button>`
     ]
   }));
   return `${pageHead({
     title: "Đổi trả hàng hóa",
-    subtitle: "Theo dõi yêu cầu đổi trả, thời điểm thực nhận và xác nhận nhập kho riêng biệt.",
+    subtitle: "Theo dõi riêng thực nhận, nhập kho và xác nhận kết quả xử lý tài chính.",
     actions: `<button class="btn btn-secondary" data-action="export-returns">${icon("download")} Xuất danh sách</button>${ACTION_ROLES["new-return"].includes(state.role) ? `<button class="btn btn-primary" data-action="new-return">${icon("plus")} Tiếp nhận đổi trả</button>` : ""}${ACTION_ROLES["new-undelivered-return"].includes(state.role) ? `<button class="btn btn-primary" data-action="new-undelivered-return">${icon("plus")} Nhận hàng giao không thành công</button>` : ""}`
   })}
   <div class="banner warning mb-16">${icon("alert")}<div><strong>Chỉ tiếp nhận lỗi từ SoulWine hoặc đơn vị vận chuyển.</strong> Hàng không lỗi do khách đổi ý bị từ chối theo chính sách đã xác nhận.</div></div>

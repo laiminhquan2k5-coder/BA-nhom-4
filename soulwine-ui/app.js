@@ -439,6 +439,7 @@ function inventoryReportView(report) {
   const skuSet = new Set(products.map((product) => product.sku));
   const low = products.filter((product) => availableOf(product) < product.min);
   const holding = state.reservations.filter((reservation) => reservation.status === "holding" && skuSet.has(reservation.sku));
+  const slow = slowMovingInventory(category);
   return `<div class="card-body">
     <form id="inventory-report-filters" class="form-grid three mb-16">
       <div class="field"><label for="inventory-report-from">Từ ngày</label><input class="input" id="inventory-report-from" name="from" type="date" value="${escapeHtml(from)}"></div>
@@ -455,6 +456,7 @@ function inventoryReportView(report) {
       <div>${card({ title: "Sản phẩm dưới định mức hiện tại", iconName: "alert", body: low.length ? `<div class="rule-list">${low.map((product) => `<div class="rule-item">${productCell(product.sku)}<strong>${num(availableOf(product))} / ${num(product.min)}</strong></div>`).join("")}</div>` : emptyState("shield", "Không có SKU dưới định mức", "Cảnh báo được tính từ tồn khả dụng hiện tại.") })}</div>
       <div>${card({ title: "Hàng hiện đang giữ theo đơn", iconName: "lock", body: holding.length ? `<div class="bar-list">${holding.map((reservation) => `<div class="bar-row"><span class="bar-label">${escapeHtml(reservation.order)} · ${escapeHtml(productName(reservation.sku))}</span><span class="bar-value">${num(reservation.qty)}</span></div>`).join("")}</div>` : emptyState("lock", "Chưa có hàng đang giữ", "Chỉ tính hàng đang giữ của nhóm được chọn.") })}</div>
     </div>` : ""}
+    <div class="mt-24">${card({ title: "Hàng chậm luân chuyển", iconName: "clock", body: `<div class="flex gap-8 flex-wrap mb-16"><label for="slow-moving-days">Thời gian không xuất</label><select class="select-sm" id="slow-moving-days" data-slow-moving-days>${[30, 60, 90, 180].map((days) => `<option value="${days}" ${slow.minimum === days ? "selected" : ""}>≥ ${days} ngày không xuất</option>`).join("")}</select></div>${dataTable([{ label: "Sản phẩm" }, { label: "Tồn vật lý", align: "num" }, { label: "Xuất gần nhất" }, { label: "Số ngày", align: "num" }], slow.rows.map((row) => ({ cells: [productCell(row.product.sku), num(row.product.physical), row.lastOut ? escapeHtml(displayDate(row.lastOut)) : "Chưa xuất", num(row.days)] })), { minWidth: 650, empty: emptyState("clock", "Không có sản phẩm phù hợp", "Chỉ tính SKU còn tồn thuộc nhóm đã chọn và đủ số ngày không xuất.") })}<p class="hint mt-12">Theo tồn hiện tại và ngày xuất gần nhất. SKU chưa xuất được tính từ mốc nhập đầu tiên; SKU thiếu mốc ngày không được tự gán số ngày.</p>` })}</div>
   </div>`;
 }
 
@@ -542,8 +544,9 @@ function exportReportDocument(action, format) {
   } else {
     if (!canExportApprovalHistory()) return toast("Bạn không có quyền xuất lịch sử phê duyệt.", "warning");
     if (action === "export-audit") {
-      const search = state.ui.auditSearch.trim();
-      data = { title: "Nhật ký xử lý và phê duyệt", filters: search ? `Tìm kiếm: ${search}` : "Không giới hạn từ khóa", columns: ["Thời điểm", "Nhân sự", "Vai trò", "Hành động", "Đối tượng", "Chi tiết"], rows: filteredAudit().map((item) => [item.time, item.actor, item.role, item.action, item.object, item.detail]) };
+      const error = auditFilterError();
+      if (error) return toast(error, "warning");
+      data = { title: "Nhật ký xử lý và phê duyệt", filters: auditFilterSummary(), columns: ["Thời điểm", "Nhân sự", "Vai trò", "Hành động", "Đối tượng", "Chi tiết"], rows: filteredAudit().map((item) => [item.time, item.actor, item.role, item.action, item.object, item.detail]) };
     } else if (action === "export-approvals") {
       const scope = state.role === "director" ? "Mọi vai trò xử lý" : "Hồ sơ do Kế toán xử lý";
       const status = { pending: "Chờ xử lý", resolved: "Đã xử lý", all: "Tất cả" }[state.ui.approvalFilter];
@@ -578,7 +581,7 @@ function exportData(action) {
     "export-requests": state.purchaseRequests,
     "export-po": state.purchaseOrders,
     "export-deliveries": state.deliveries,
-    "export-returns": state.returns,
+    "export-returns": state.returns.map((item) => ({ ...item, status: STATUS_META[returnStatus(item)]?.label || returnStatus(item) })),
     "export-documents": state.documents,
     "export-issues": state.issues,
     "export-roles": Object.entries(ROLES).map(([id, role]) => ({ id, ...role }))
@@ -724,6 +727,14 @@ document.addEventListener("click", (event) => {
   }
   const result = target.closest("[data-search-index]");
   if (result) return chooseSearch(Number(result.dataset.searchIndex));
+  if (target.closest("[data-audit-reset]")) {
+    if (!state.loggedIn) return;
+    state.ui.auditFilter = {};
+    state.ui.auditSearch = "";
+    render(true);
+    document.querySelector("[data-audit-reset]")?.focus({ preventScroll: true });
+    return;
+  }
   const filter = target.closest("[data-filter-group]");
   if (filter) { state.ui[filter.dataset.filterGroup] = filter.dataset.filterValue; return render(true); }
   const tab = target.closest("[data-tab-group]");
@@ -749,6 +760,15 @@ document.addEventListener("click", (event) => {
 document.addEventListener("input", (event) => {
   const target = event.target;
   if (!state.loggedIn) return;
+  if (target.dataset.listSearch === "audit") {
+    state.ui.auditSearch = target.value;
+    const { selectionStart, selectionEnd } = target;
+    render(true);
+    const search = document.querySelector('[data-list-search="audit"]');
+    search?.focus({ preventScroll: true });
+    if (search && selectionStart !== null) search.setSelectionRange(selectionStart, selectionEnd);
+    return;
+  }
   if (target.dataset.listSearch) {
     const keys = { orders: "orderSearch", quotes: "quoteSearch", contracts: "contractSearch", customers: "customerSearch", products: "productSearch", availability: "availabilitySearch", audit: "auditSearch", movements: "movementSearch" };
     state.ui[keys[target.dataset.listSearch]] = target.value;
@@ -765,6 +785,12 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const target = event.target;
   if (!state.loggedIn) return;
+  if (["from", "to", "actor", "type", "result"].includes(target.dataset.auditFilter)) {
+    state.ui.auditFilter = { ...state.ui.auditFilter, [target.dataset.auditFilter]: target.value };
+    render(true);
+    document.getElementById(target.id)?.focus({ preventScroll: true });
+    return;
+  }
   if (target.dataset.qmeta && quoteEditable(currentQuote())) {
     currentQuote()[target.dataset.qmeta] = target.value;
     if (target.dataset.qmeta !== "note") render(true);
@@ -773,6 +799,8 @@ document.addEventListener("change", (event) => {
   if (target.dataset.qcheck) scheduleWorkspaceSave();
   if (target.dataset.action === "toggle-variance") { state.ui.stocktakeVarianceOnly = target.checked; render(true); }
   if (target.hasAttribute("data-report-period")) { state.ui.reportPeriod = target.value; render(true); }
+  if (target.hasAttribute("data-report-channel")) { state.ui.reportChannel = target.value; render(true); }
+  if (target.hasAttribute("data-slow-moving-days")) { state.ui.slowMovingDays = Number(target.value); render(true); }
   if (target.closest("#action-form") && activeDialog) { activeDialog.dirty = true; if (activeDialog.input) activeDialog.input(); }
   if (target.closest("#settings-form") && !target.dataset.syncField) { state.ui.settingsDirty = true; const note = document.getElementById("settings-save-note"); if (note) note.textContent = "Có thay đổi chưa lưu"; }
 });

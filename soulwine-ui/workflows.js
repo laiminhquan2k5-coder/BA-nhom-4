@@ -10,6 +10,8 @@ const ACTION_ROLES = {
   "edit-order": ["sales_manager", "sales_staff"],
   "cancel-order": ["sales_manager", "sales_staff"],
   "new-customer": ["director", "sales_manager", "sales_staff"],
+  "edit-supplier": ["director", "warehouse_manager"],
+  "supplier-catalog": ["director", "warehouse_manager", "accountant"],
   "open-payment": ["accountant", "sales_staff"],
   "open-invoice": ["accountant"],
   "open-reserve": ["warehouse_manager"],
@@ -43,6 +45,7 @@ Object.assign(ACTION_ROLES, {
   "return-receive": ["warehouse_staff", "warehouse_manager"],
   "return-inspection": ["warehouse_manager"],
   "return-finance-evidence": ["accountant"],
+  "return-finance-resolve": ["accountant"],
   "return-replacement-evidence": ["warehouse_manager"]
 });
 
@@ -446,7 +449,7 @@ function decideApproval(id, approve, confirmed = false, savedReason = "") {
   const approval = state.approvals.find((item) => item.id === id);
   if (!approval || approval.status !== "pending") return toast("Hồ sơ đã được xử lý.", "info");
   if (approval.assignee !== state.role) return toast(`Hồ sơ thuộc vai trò ${ROLES[approval.assignee].label}.`, "warning");
-  const reason = confirmed ? savedReason : document.getElementById("decision-reason")?.value.trim() || "";
+  const reason = String(confirmed ? savedReason : document.getElementById("decision-reason")?.value || "").trim();
   if (!approve && !reason) {
     document.getElementById("decision-error")?.classList.remove("hidden");
     document.getElementById("decision-reason")?.focus();
@@ -820,8 +823,17 @@ function showShipmentForm(code) {
 }
 
 function updateReceiptInput(input) {
-  if (!["warehouse_manager", "warehouse_staff"].includes(state.role)) return;
+  if (!state.loggedIn || workspaceStatus.conflict || !["warehouse_manager", "warehouse_staff"].includes(state.role)) return;
   const receipt = receiptByCode(input.dataset.code);
+  if (!receipt || receipt.status !== "receiving") return;
+  if (input.dataset.rcField === "varianceNote") {
+    if (receipt.source) return;
+    receipt.varianceNote = input.value.slice(0, 1000);
+    refreshReceiptEditor(receipt);
+    scheduleWorkspaceSave();
+    return;
+  }
+  if (!["received", "good", "damaged"].includes(input.dataset.rcField)) return;
   const line = receipt?.lines.find((item) => item.sku === input.dataset.sku);
   const value = Number(input.value);
   if (!line || receipt.status !== "receiving") return;
@@ -862,14 +874,23 @@ function confirmReceipt(code, returnLot = false) {
   if (returnLot && !canRefuse()) return toast("Chỉ trả lô đã đối chiếu đầy đủ và vượt ngưỡng sai lệch đã cấu hình.", "warning");
   if (!returnLot && !receipt.source && receiptThreshold(receipt) === null) return toast("Thiết lập ngưỡng sai lệch trong Cài đặt trước khi xác nhận nhập.", "warning");
   if (!receiptCountsComplete(receipt)) return toast("Nhập đủ số thực nhận, đạt và lỗi cho mọi dòng trước khi quyết định.", "warning");
+  const validVarianceNote = () => !receiptHasVariance(receipt) || !!String(receipt.varianceNote || "").trim();
+  const missingVarianceNote = () => { refreshReceiptEditor(receipt); toast("Ghi loại và nguyên nhân sai lệch trước khi xác nhận kết quả.", "warning"); };
+  if (!validVarianceNote()) return missingVarianceNote();
+  if (!receipt.source && String(receipt.varianceNote || "").length > 1000) return toast("Loại và nguyên nhân sai lệch không được vượt 1000 ký tự.", "warning");
   if (!receipt.evidence.length) return toast("Đính kèm phiếu giao / biên bản kiểm đếm trước khi xác nhận kết quả.", "warning");
   const receiptLock = () => stockLock(receipt.lines.map((line) => line.sku));
   const lock = !returnLot && receiptLock();
   if (lock) return toast(`Có SKU nhập đang khóa theo kỳ ${lock.code}.`, "warning");
   if (!returnLot && receiptOverThreshold(receipt)) return toast("Sai lệch vượt ngưỡng: phải trả lô và yêu cầu giao lại.", "warning");
   if (!returnLot && receipt.lines.some((line) => line.good + line.damaged !== line.received)) return toast("Hàng đạt + hư hỏng phải bằng thực nhận ở từng dòng.", "warning");
+  const actor = state.activeUserId;
+  const snapshot = () => JSON.stringify([receipt.lines, receipt.evidence, receipt.varianceNote, receiptThreshold(receipt)]);
+  const reviewed = snapshot();
   confirmAction(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", returnLot ? "Không ghi tăng tồn. Lưu yêu cầu nhà cung cấp giao lại." : "Ghi tăng tồn vật lý theo thực nhận; hàng lỗi được tách khỏi tồn khả dụng.", () => {
     if (receiptByCode(code) !== receipt || receipt.status !== "receiving" || !guardAction(returnLot ? "return-receipt" : "confirm-receipt")) return;
+    if (!validVarianceNote()) return missingVarianceNote();
+    if (!state.loggedIn || state.activeUserId !== actor || snapshot() !== reviewed) return toast("Dữ liệu tiếp nhận đã thay đổi. Kiểm tra lại trước khi xác nhận.", "warning");
     if (!activePoAttempt() || (returnLot && !canRefuse())) return toast("Dữ liệu tiếp nhận không còn đủ điều kiện xác nhận.", "warning");
     const currentLock = !returnLot && receiptLock();
     if (currentLock) return toast(`Có SKU nhập đang khóa theo kỳ ${currentLock.code}.`, "error");
@@ -889,7 +910,8 @@ function confirmReceipt(code, returnLot = false) {
       order.status = returnLot ? "returned" : "completed";
     }
     receipt.threshold = threshold;
-    addAudit(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", code, receipt.po || `${receipt.source} · ${receipt.note}`, returnLot ? "danger" : "success");
+    if (!receipt.source) receipt.varianceNote = String(receipt.varianceNote || "").trim();
+    addAudit(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", code, receipt.source ? `${receipt.source} · ${receipt.note}` : `${receipt.po}${receipt.varianceNote ? ` · ${receipt.varianceNote}` : ""}`, returnLot ? "danger" : "success");
     render(true); toast(returnLot ? "Đã ghi trả lô, yêu cầu giao lại." : "Đã nhập kho và ghi thẻ kho.");
   }, returnLot);
 }
@@ -1085,11 +1107,11 @@ function showSecondaryDetails(kind, code) {
   if (kind === "supplier") {
     const supplier = state.suppliers.find((item) => item.id === code);
     if (!supplier) return;
-    showDialog({ drawer: true, title: supplier.name, subtitle: supplier.id, body: `<div class="kv-grid">${[["Người liên hệ", supplier.contact], ["Điện thoại", supplier.phone], ["Email", supplier.email], ["Thanh toán", supplier.terms], ["Địa chỉ", supplier.address], ["MST", supplier.tax]].map(([label, value]) => `<div><div class="kv-label">${escapeHtml(label)}</div><div class="kv-value">${escapeHtml(value)}</div></div>`).join("")}</div><div class="divider"></div><h3 class="section-title">Sản phẩm cung ứng</h3>${state.products.filter((product) => product.supplier === code).map((product) => `<div class="picker-row">${productCell(product.sku)}</div>`).join("")}` });
+    showDialog(supplierDetails(supplier));
   } else if (kind === "request") {
     const request = state.purchaseRequests.find((item) => item.code === code);
     if (!request) return;
-    showDialog({ drawer: true, title: code, subtitle: supplierName(request.supplier), body: `${statusChip(request.status)}<p class="small muted mt-16">${escapeHtml(request.note)}</p><p class="strong mt-12">${money(request.amount)}</p>${request.lines.map((line) => `<div class="picker-row">${productCell(line.sku)}<strong>${line.qty}</strong></div>`).join("")}<div class="mt-16"><div class="section-title">Báo giá nhà cung cấp</div>${purchaseAttachment(request.quoteAttachmentId, request.code)}</div><a class="btn btn-secondary mt-16" href="#/approvals">Mở phê duyệt</a>` });
+    showDialog({ drawer: true, title: code, subtitle: supplierName(request.supplier), body: `${statusChip(request.status)}<p class="small muted mt-16">${escapeHtml(request.note)}</p><p class="strong mt-12">${money(request.amount)}</p>${request.lines.map((line) => `<div class="picker-row">${productCell(line.sku)}<strong>${line.qty}</strong></div>`).join("")}<div class="mt-16"><div class="section-title">Báo giá nhà cung cấp</div>${purchaseAttachment(request.quoteAttachmentId, request.code)}</div>${purchaseRequestProcessing(request)}${routeAllowed("approvals") ? '<a class="btn btn-secondary mt-16" href="#/approvals">Mở phê duyệt</a>' : ""}` });
   } else if (kind === "purchase-order") {
     const order = state.purchaseOrders.find((item) => item.code === code);
     if (order) showDialog({ drawer: true, wide: true, title: code, subtitle: supplierName(order.supplier), body: purchaseOrderDetails(order) });
@@ -1104,6 +1126,7 @@ function showSecondaryDetails(kind, code) {
 
 function dispatchAction(action, data = {}) {
   if (!guardAction(action)) return;
+  if (action === "auto-purchase-request") return showPurchaseRequestForm(true);
   if (action === "create-basic-receipt") return handleManagementAction(action, data);
   if (action === "redeliver-po" && data.previous) return showReceiptForm(data.code, data.previous);
   if (action === "record-supplier-payment" || action === "record-purchase-cost") return showPurchaseFinanceForm(data.code, action === "record-purchase-cost");
@@ -1117,6 +1140,8 @@ function dispatchAction(action, data = {}) {
     return printRecord(kind, data.code || state.routeParam);
   }
   switch (action) {
+    case "edit-supplier": return showSupplierForm(data.id);
+    case "supplier-catalog": return showSupplierCatalogForm(data.id);
     case "edit-customer": return showCustomerForm(data.id);
     case "close-dialog": return closeDialog();
     case "confirm-dialog": { const callback = activeDialog?.confirm; closeDialog(true); try { if (callback) callback(); } catch (error) { toast(error.message, "error"); } return; }
@@ -1247,6 +1272,7 @@ function dispatchAction(action, data = {}) {
     case "return-receive": return showReturnReceipt(data.code);
     case "return-inspection": return showReturnInspection(data.code);
     case "return-finance-evidence": return showReturnResolutionEvidence(data.code, "finance");
+    case "return-finance-resolve": return showReturnFinanceResolution(data.code);
     case "return-replacement-evidence": return showReturnResolutionEvidence(data.code, "replacement");
     case "mark-all-read": allowedNotifications().forEach((item) => item.unread = false); persistWorkspace(); closePopover(); renderShell(); return toast("Đã đánh dấu thông báo là đã đọc.");
     case "logout": {
@@ -1311,7 +1337,7 @@ function deliveryReturnRemaining(delivery, sku, exclude, kind = deliveryReturnKi
 function deliveryReturnBlock(delivery, allowPending = false) {
   const returns = deliveryReturns(delivery);
   if (delivery.retryClosedAt || delivery.status === "returned") return "Chuyến đã đóng sau khi nhập hoàn. Phần chưa giao cần giữ và xuất kho mới.";
-  if (delivery.returned || returns.some((entry) => entry.status === "completed" || entry.postedAt)) return "Không thể dùng lại chuyến đã nhập hoàn. Đối chiếu và nhập hoàn hết phần chưa giao trước khi xuất kho mới cho đợt này.";
+  if (delivery.returned || returns.some(returnIsPosted)) return "Không thể dùng lại chuyến đã nhập hoàn. Đối chiếu và nhập hoàn hết phần chưa giao trước khi xuất kho mới cho đợt này.";
   if (returns.some((entry) => entry.status === "return_received" || (!allowPending && entry.status === "inspecting"))) return "Chuyến đang có yêu cầu hoàn hàng. Không thể bàn giao lại hoặc ghi nhận khách đã nhận hàng.";
   return "";
 }
@@ -1399,10 +1425,6 @@ function showDeliveryResultForm(code, result) {
   });
 }
 
-function returnIsPosted(item) {
-  return item.status === "completed" || item.postedAt || state.movements.some((move) => move.type === "Hàng hoàn" && move.ref === item.code);
-}
-
 function recordReturnReceipt(item, receivedAt, receiptNote, evidenceId) {
   Object.assign(item, { status: "return_received", receivedAt, receivedQty: item.qty, receiptRecordedAt: new Date().toISOString(), receiptActorId: state.activeUserId, receiptEvidenceId: evidenceId, receiptNote });
   addAudit("Ghi nhận thực nhận hàng hoàn", item.code, `${item.delivery} · ${item.sku} · ${item.qty} · ${receiptNote}`);
@@ -1459,7 +1481,7 @@ function showReturnInspection(code) {
     const remainingItems = deliveryOutstandingItems(delivery);
     const shipment = deliveryShipment(delivery);
     if (undelivered && (!Number.isSafeInteger(line.shipped) || line.shipped - item.qty < state.deliveries.filter((entry) => entry.order === order.code).reduce((sum, entry) => sum + deliveryAcceptedQty(entry, item.sku), 0))) return formError("Lượng đã xuất của đơn không khớp hàng chưa giao được trả về.");
-    if (undelivered && previous.some((entry) => !delivery.returned || entry.delivery !== delivery.code || entry.status !== "completed")) return formError("Có hàng hoàn cũ chưa đối chiếu lượng đã xuất. Không thể tự động nhập tiếp cho chuyến này.");
+    if (undelivered && previous.some((entry) => !delivery.returned || entry.delivery !== delivery.code || (!entry.postedAt && entry.status !== "completed"))) return formError("Có hàng hoàn cũ chưa đối chiếu lượng đã xuất. Không thể tự động nhập tiếp cho chuyến này.");
     if (undelivered && delivery.shipmentId && shipment?.delivery !== delivery.code) return formError("Đợt giao hợp đồng không còn khớp chuyến trả về. Cần đối chiếu trước khi nhập.");
     const fullyReturned = undelivered && remainingItems.every(({ sku, qty }) => qty === (sku === item.sku ? item.qty : 0) + previous.filter((entry) => entry.sku === sku).reduce((sum, entry) => sum + entry.qty, 0));
     const physical = product.physical + item.qty, damaged = product.damaged + damagedQty;
@@ -1467,7 +1489,7 @@ function showReturnInspection(code) {
 
     const postedAt = new Date().toISOString();
     Object.assign(product, { physical, damaged });
-    Object.assign(item, { status: "completed", condition: goodQty && damagedQty ? "mixed" : goodQty ? "good" : "damaged", goodQty, damagedQty, note, postedAt, postedBy: state.activeUserId });
+    Object.assign(item, { status: "return_finance_pending", condition: goodQty && damagedQty ? "mixed" : goodQty ? "good" : "damaged", goodQty, damagedQty, note, postedAt, postedBy: state.activeUserId });
     Object.assign(delivery, { returned: true, returnedAt: postedAt });
     if (undelivered) {
       line.shipped -= item.qty;
@@ -1490,16 +1512,35 @@ function showReturnResolutionEvidence(code, track) {
   const action = `return-${track}-evidence`;
   const actor = deliveryActionActor(action);
   const item = state.returns.find((entry) => entry.code === code);
-  if (!actor || item?.status !== "completed") return;
+  if (!actor || !item || !returnIsPosted(item)) return;
   const title = track === "finance" ? "hồ sơ tiền / công nợ" : "hồ sơ đổi bù";
   showForm(`Lưu chứng từ ${title}`, `<p class="small muted">Chỉ lưu căn cứ của phương án đã được người có thẩm quyền quyết định bên ngoài bước này. Không phê duyệt, ghi tiền, tạo đơn đổi bù hoặc xuất kho.</p>${inputField("reference", "Số quyết định / chứng từ đã kiểm tra", "text", "", "required maxlength=120")}${inputField("note", "Kết quả đối chiếu", "text", "", "required maxlength=240")}${deliveryEvidenceField("Tệp chứng từ đã kiểm tra")}`, async (data) => {
     const reference = String(data.get("reference") || "").trim(), note = String(data.get("note") || "").trim(), file = data.get("evidence");
-    const current = () => deliveryActionActor(action) === actor && state.returns.includes(item) && item.status === "completed" && !(item.resolutionEvidence || []).some((entry) => entry.track === track && entry.reference.toLowerCase() === reference.toLowerCase());
-    if (!current() || !reference || reference.length > 120 || !note || note.length > 240 || !file?.name) return formError("Cần vai trò đúng, chứng từ chưa lưu, mã tham chiếu và kết quả đối chiếu.");
+    const current = () => deliveryActionActor(action) === actor && state.returns.includes(item) && returnIsPosted(item) && !(item.resolutionEvidence || []).some((entry) => entry.track === track && String(entry.reference).toLowerCase() === reference.toLowerCase());
+    if (!current() || !reference || reference.length > 120 || !note || note.length > 240 || !file?.name || !file.size) return formError("Cần vai trò đúng, tệp chứng từ không trống chưa lưu, mã tham chiếu và kết quả đối chiếu.");
     const attachment = await storeDeliveryEvidence(file, code, current);
     if (!attachment) return;
     (item.resolutionEvidence ||= []).push({ track, reference, note, evidenceId: attachment.id, actorId: state.activeUserId, actorRole: state.role, recordedAt: new Date().toISOString() });
     addAudit(`Lưu chứng từ ${title}`, code, `${reference} · ${note}`);
     closeDialog(); render(true); toast("Đã lưu chứng từ; không tạo giao dịch tiền hoặc tồn kho.");
   });
+}
+
+function showReturnFinanceResolution(code) {
+  const action = "return-finance-resolve", actor = deliveryActionActor(action);
+  const item = state.returns.find((entry) => entry.code === code);
+  if (!actor || !item || !returnIsPosted(item) || returnFinanciallyResolved(item)) return;
+  const evidence = returnFinanceEvidence(item), originalResolution = item.financialResolution;
+  if (!evidence.length) return toast("Lưu chứng từ tiền / công nợ đã kiểm tra trước khi xác nhận kết quả tài chính.", "warning");
+  showForm("Xác nhận kết quả xử lý tài chính", `<div class="banner warning mb-16">Chỉ ghi nhận kết quả đã được xử lý theo quyết định có thẩm quyền và đã đối chiếu. Không dùng bước này để duyệt phương án, hoàn tiền, cấn trừ hoặc tạo đổi bù.</div>${selectField("evidenceId", "Chứng từ tài chính đã lưu", [["", "Chọn chứng từ đã đối chiếu"], ...evidence.map((entry) => [entry.evidenceId, entry.reference])])}${inputField("authorizationReference", "Căn cứ thẩm quyền / quyết định đã được duyệt", "text", "", "required maxlength=120")}${inputField("note", "Kết quả xử lý đã xác minh", "text", "", "required maxlength=240")}<label class="checkline"><input type="checkbox" name="authorized" required> Phương án đã được người có thẩm quyền quyết định; không còn chờ duyệt tiền hoặc đổi bù.</label><label class="checkline mt-12"><input type="checkbox" name="verified" required> Tôi đã đối chiếu chứng từ và xác minh việc xử lý tài chính đã hoàn thành, không chỉ mới có đề nghị.</label>`, (data) => {
+    const entry = evidence.find((record) => record.evidenceId === data.get("evidenceId"));
+    if (deliveryActionActor(action) !== actor || !state.returns.includes(item) || !returnIsPosted(item) || returnFinanciallyResolved(item) || item.financialResolution !== originalResolution || !entry || !returnFinanceEvidence(item).includes(entry)) return formError("Hồ sơ, chứng từ hoặc quyền đã thay đổi; tải lại hồ sơ để xác nhận.");
+    const authorizationReference = String(data.get("authorizationReference") || "").trim(), note = String(data.get("note") || "").trim();
+    if (!authorizationReference || authorizationReference.length > 120 || !note || note.length > 240 || data.get("authorized") !== "on" || data.get("verified") !== "on") return formError("Cần căn cứ thẩm quyền, kết quả đã xác minh và cả hai xác nhận rõ ràng của Kế toán.");
+    const resolution = { status: "resolved", evidenceId: entry.evidenceId, reference: entry.reference, authorizationReference, note, actorId: state.activeUserId, actorRole: state.role, resolvedAt: new Date().toISOString(), authorized: true, verified: true };
+    if (!returnFinanciallyResolved({ ...item, financialResolution: resolution })) return formError("Chứng từ hoặc thời điểm xử lý chưa đủ căn cứ hoàn tất tài chính.");
+    Object.assign(item, { status: "completed", financialResolution: resolution });
+    addAudit("Xác nhận kết quả tài chính hàng hoàn", code, `${entry.reference} · ${authorizationReference} · ${note}`, "success");
+    closeDialog(); render(true); toast("Đã xác nhận tài chính đã xử lý; không tạo giao dịch tiền hoặc tồn kho.");
+  }, { submitLabel: "Xác nhận tài chính đã xử lý" });
 }

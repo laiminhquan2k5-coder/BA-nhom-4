@@ -140,28 +140,68 @@ function storageRecoveryView() {
   return `${pageHead({ title: "Cần khôi phục không gian làm việc", subtitle: "Dữ liệu đã lưu chưa thể đọc. Chưa có dữ liệu nào bị ghi đè." })}<section class="card recovery-card">${icon("shield")}<h2>Bảo toàn dữ liệu trước khi tiếp tục</h2><p>Tải bản dữ liệu hiện tại để kiểm tra hoặc khôi phục từ một bản sao lưu hợp lệ.</p><div class="flex gap-8 flex-wrap"><button class="btn btn-primary" data-action="download-recovery">Tải dữ liệu cần khôi phục</button><button class="btn btn-secondary" data-action="restore-backup">Chọn bản sao lưu</button></div></section>`;
 }
 
-function salesAnalytics() {
-  const completed = state.orders.filter((order) => order.status === "completed");
-  const now = new Date();
+function reportRecordDay(record, fields) {
+  for (const field of fields) {
+    const day = inventoryMoveDay({ timestamp: record[field] });
+    if (day) return day;
+  }
+  return "";
+}
+
+function salesPeriodRange(now = new Date()) {
+  const today = inventoryLocalDay(now);
+  const [year, month] = today.split("-").map(Number);
   const period = state.ui.reportPeriod || "all";
-  const orders = completed.filter((order) => {
-    const [day, month, year] = order.created.split("/").map(Number);
-    if (period === "month") return month === now.getMonth() + 1 && year === now.getFullYear();
-    if (period === "quarter") return Math.floor((month - 1) / 3) === Math.floor(now.getMonth() / 3) && year === now.getFullYear();
-    return Number.isFinite(day + month + year);
-  });
-  const months = Array.from({ length: 6 }, (_, index) => { const date = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1); return { month: date.getMonth() + 1, year: date.getFullYear(), label: `T${date.getMonth() + 1}`, value: 0 }; });
+  if (period === "today") return { from: today, to: today };
+  if (period === "week") {
+    const date = new Date(`${today}T00:00:00Z`);
+    const offset = (date.getUTCDay() + 6) % 7;
+    return { from: new Date(+date - offset * 86400000).toISOString().slice(0, 10), to: new Date(+date + (6 - offset) * 86400000).toISOString().slice(0, 10) };
+  }
+  if (period === "month" || period === "quarter") {
+    const firstMonth = period === "quarter" ? Math.floor((month - 1) / 3) * 3 + 1 : month;
+    const next = new Date(Date.UTC(year, firstMonth - 1 + (period === "quarter" ? 3 : 1), 1));
+    return { from: `${year}-${String(firstMonth).padStart(2, "0")}-01`, to: new Date(+next - 86400000).toISOString().slice(0, 10) };
+  }
+  return { from: "", to: "" };
+}
+
+function salesAnalytics(now = new Date()) {
+  const range = salesPeriodRange(now);
+  const inPeriod = (day) => !!day && (!range.from || day >= range.from) && (!range.to || day <= range.to);
+  const channelFilter = state.ui.reportChannel || "all";
+  const channelMatches = (type) => channelFilter === "all" || (channelFilter === "wholesale") === (type === "Bán sỉ");
+  const orders = state.orders.filter((order) => order.status === "completed" && channelMatches(order.type) && inPeriod(reportRecordDay(order, ["createdAt", "created"])));
+  const quotes = state.quotes.filter((quote) => channelMatches(quote.channel || "Bán sỉ") && inPeriod(reportRecordDay(quote, ["createdTimestamp", "createdAt", "created"])));
+  const [year, month] = inventoryLocalDay(now).split("-").map(Number);
+  const months = Array.from({ length: 6 }, (_, index) => { const date = new Date(Date.UTC(year, month - 6 + index, 1)); return { month: date.getUTCMonth() + 1, year: date.getUTCFullYear(), label: `T${date.getUTCMonth() + 1}`, value: 0 }; });
   const channels = new Map(), products = new Map(), people = new Map();
+  const customerGroups = [{ label: "Doanh nghiệp / khách sỉ", orders: 0, qty: 0, value: 0 }, { label: "Cá nhân / khách lẻ", orders: 0, qty: 0, value: 0 }];
+  const staff = new Map();
+  const person = (name) => {
+    const key = name || "Chưa phân công";
+    if (!staff.has(key)) staff.set(key, { name: key, quotes: 0, signedContracts: 0, completedOrders: 0, sales: 0, closeRate: null });
+    return staff.get(key);
+  };
+  const owner = (record) => record.owner || state.users.find((user) => user.id === (record.createdBy || record.ownerId))?.name || "Chưa phân công";
+  state.users.filter((user) => user.roleIds?.some((role) => ["sales_manager", "sales_staff"].includes(role))).forEach((user) => person(user.name));
+  quotes.forEach((quote) => { person(owner(quote)).quotes++; });
+  const quotesByCode = new Map(state.quotes.map((quote) => [quote.code, quote]));
+  state.contracts.filter((contract) => channelMatches("Bán sỉ") && ["signed", "active", "liquidated"].includes(contract.status) && contract.signedAt && inPeriod(reportRecordDay(contract, ["signedAt"])) && quotesByCode.has(contract.quote)).forEach((contract) => { person(owner(quotesByCode.get(contract.quote))).signedContracts++; });
   orders.forEach((order) => {
-    const [day, month, year] = order.created.split("/").map(Number);
-    const bucket = months.find((item) => item.month === month && item.year === year);
+    const day = reportRecordDay(order, ["createdAt", "created"]);
+    const bucket = months.find((item) => item.month === Number(day.slice(5, 7)) && item.year === Number(day.slice(0, 4)));
     if (bucket) bucket.value += order.total;
     const channel = order.type === "Bán sỉ" ? "Bán sỉ" : `Bán lẻ · ${order.channel}`;
     channels.set(channel, (channels.get(channel) || 0) + order.total);
     people.set(order.owner, (people.get(order.owner) || 0) + order.total);
+    const customer = customerById(order.customerId);
+    const group = customerGroups[customer?.type === "Bán sỉ" || customer?.type === "Doanh nghiệp" || customer?.kind === "business" || (!customer && order.type === "Bán sỉ") ? 0 : 1];
+    group.orders++; group.qty += order.lines.reduce((sum, line) => sum + line.qty, 0); group.value += order.total;
+    const employee = person(owner(order)); employee.completedOrders++; employee.sales += order.total;
     let weights = order.lines.map((line) => {
       const gross = (line.price ?? 0) * line.qty;
-      return Math.max(0, gross - Math.round(gross * ((line.discount ?? 0) / 100)));
+      return Math.max(0, gross - quoteDiscountVnd(quoteLineDiscount(line), gross));
     });
     let totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
     if (!totalWeight && order.total > 0) {
@@ -180,7 +220,50 @@ function salesAnalytics() {
       products.set(line.sku, { qty: previous.qty + line.qty, value: previous.value + value });
     });
   });
-  return { orders, total: orders.reduce((sum, order) => sum + order.total, 0), months, channels: [...channels], products: [...products].sort((a, b) => b[1].value - a[1].value), people: [...people] };
+  staff.forEach((employee) => { employee.closeRate = employee.quotes ? employee.signedContracts / employee.quotes * 100 : null; });
+  return { orders, quotes, total: orders.reduce((sum, order) => sum + order.total, 0), months, channels: [...channels], products: [...products].sort((a, b) => b[1].value - a[1].value), people: [...people], customerGroups, staff: [...staff.values()], range };
+}
+
+function slowMovingInventory(category = "", now = new Date()) {
+  const minimum = [30, 60, 90, 180].includes(Number(state.ui.slowMovingDays)) ? Number(state.ui.slowMovingDays) : 60;
+  const today = inventoryLocalDay(now);
+  const lastOut = new Map(), firstIn = new Map();
+  const remember = (map, sku, day, latest) => { if (day && day <= today && (!map.has(sku) || (latest ? day > map.get(sku) : day < map.get(sku)))) map.set(sku, day); };
+  state.movements.forEach((movement) => {
+    const day = inventoryMoveDay(movement);
+    if (movement.type === "Xuất kho" && Math.abs(movement.physicalDelta ?? movement.qty) > 0) remember(lastOut, movement.sku, day, true);
+    if (["Nhập kho", "Tồn đầu kỳ", "Hàng hoàn"].includes(movement.type) && (movement.physicalDelta ?? movement.qty) > 0) remember(firstIn, movement.sku, day, false);
+  });
+  state.issues.filter((issue) => issue.status === "issued").forEach((issue) => {
+    const day = reportRecordDay(issue, ["timestamp", "issuedAt", "date"]);
+    issue.lines.forEach((line) => { if (line.qty > 0) remember(lastOut, line.sku, day, true); });
+  });
+  const rows = state.products.filter((product) => product.physical > 0 && (!category || product.category === category)).map((product) => {
+    const last = lastOut.get(product.sku) || "";
+    const basis = last || firstIn.get(product.sku) || reportRecordDay(product, ["createdAt", "created"]);
+    const days = basis ? Math.floor((new Date(`${today}T00:00:00Z`) - new Date(`${basis}T00:00:00Z`)) / 86400000) : null;
+    return { product, lastOut: last, days };
+  }).filter((row) => row.days !== null && row.days >= minimum).sort((a, b) => b.days - a.days || a.product.sku.localeCompare(b.product.sku));
+  return { minimum, rows };
+}
+
+function warehouseQuality() {
+  const periods = state.stocktakes.filter((period) => period.status !== "cancelled").map((period) => {
+    const counted = period.lines.filter((line) => Number.isSafeInteger(line.count) && line.count >= 0 && Number.isSafeInteger(line.system));
+    const different = counted.filter((line) => line.count !== line.system).length;
+    return { code: period.code, scope: period.scope, different, counted: counted.length, rate: counted.length ? different / counted.length * 100 : null };
+  }).filter((period) => period.counted > 0);
+  const received = state.receipts.filter((receipt) => receipt.status !== "cancelled").flatMap((receipt) => receipt.lines.filter((line) => [line.ordered, line.received, line.damaged].every((value) => Number.isSafeInteger(value) && value >= 0)));
+  const sum = (rows, field) => rows.reduce((total, row) => total + row[field], 0);
+  const returned = state.returns.reduce((total, item) => total + (item.receivedAt && Number.isSafeInteger(item.receivedQty) ? item.receivedQty : returnIsPosted(item) ? item.qty : 0), 0);
+  const issued = state.issues.filter((issue) => issue.status === "issued").flatMap((issue) => issue.lines);
+  const measures = [
+    { label: "Sai lệch kiểm kê", numerator: sum(periods, "different"), denominator: sum(periods, "counted"), basis: "mã lệch / mã đã đếm" },
+    { label: "Sai lệch hàng nhập", numerator: received.reduce((total, line) => total + Math.abs(line.received - line.ordered), 0), denominator: sum(received, "ordered"), basis: "|thực nhận − đặt| / đặt" },
+    { label: "Hàng hư hỏng khi nhập", numerator: sum(received, "damaged"), denominator: sum(received, "received"), basis: "hàng hư hỏng / hàng thực nhận" },
+    { label: "Hàng hoàn trên hàng đã xuất", numerator: returned, denominator: sum(issued, "qty"), basis: "hàng thực nhận về / hàng đã xuất" }
+  ].map((measure) => ({ ...measure, rate: measure.denominator ? measure.numerator / measure.denominator * 100 : null }));
+  return { measures, periods };
 }
 
 function businessMinutesBetween(start, end) {
@@ -270,6 +353,10 @@ function recalculateNotifications() {
   });
   if (preferences.approval) state.orders.filter((order) => order.issueRequest?.status === "pending").forEach((order) => add(`issue:${order.code}:${order.issueRequest.requestedAt}`, `${order.code} chờ xác nhận xuất`, `Yêu cầu từ ${order.issueRequest.requestedBy}`, `orders/${encodeURIComponent(order.code)}`, ["warehouse_manager"]));
   if (preferences.payment) state.payments.filter((item) => item.status === "pending_confirm").forEach((item) => add(`payment:${item.id}`, `${item.id} cần xác nhận thanh toán`, `${item.record} · ${money(item.amount)}`, "payments", ["accountant"]));
+  if (preferences.payment) state.purchaseOrders.forEach((order) => {
+    const receipt = purchaseCostReceipt(order);
+    if (receipt && !receipt.costAdjustment) add(`purchase-cost:${receipt.code}`, `${order.code} chờ đối chiếu chi phí mua`, `Phiếu ${receipt.code} có chênh lệch thực nhận hoặc hàng hư hỏng.`, `receipts/${encodeURIComponent(receipt.code)}`, ["accountant"]);
+  });
   if (preferences.stock) state.products.filter((product) => product.status === "product_active" && availableOf(product) < product.min).forEach((product) => add(`stock:${product.sku}`, `${product.sku} dưới định mức tồn`, `Khả dụng ${availableOf(product)} / định mức ${product.min}`, "availability"));
   if (preferences.shipment) state.contracts.forEach((contract) => contract.shipments.filter((shipment) => shipment.status !== "delivered").forEach((shipment, index) => {
     const days = Math.ceil((new Date(`${isoDate(shipment.date)}T00:00:00+07:00`) - new Date()) / 86400000);
@@ -287,6 +374,7 @@ function allowedNotifications() { return state.notifications.filter((item) => (!
 function clearActiveFilters() {
   ["orderFilter", "quoteFilter", "contractFilter", "paymentFilter", "customerFilter", "productFilter", "docFilter", "movementType"].forEach((key) => state.ui[key] = "all");
   ["orderSearch", "quoteSearch", "contractSearch", "customerSearch", "productSearch", "availabilitySearch", "auditSearch", "movementSearch"].forEach((key) => state.ui[key] = "");
+  state.ui.auditFilter = {};
   state.ui.tableViews = {}; render(true);
 }
 
