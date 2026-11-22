@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createApp } from "../server.js";
+import { readSharedWorkspace } from "../src/store/shared-workspace.js";
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "kilo", "soulwine-api-test-"));
 let server;
@@ -25,6 +26,7 @@ const initialPasswords = {
   "ngan.pham@soulwine.vn": "SW-Kho@2026"
 };
 const accountPassword = {};
+const recoveryMessages = [];
 const passwordFor = (role) => accountPassword[emails[role]] ?? initialPasswords[emails[role]];
 
 async function api(method, requestPath, { token, body } = {}) {
@@ -64,7 +66,7 @@ async function establish(role, newPassword) {
 }
 
 before(async () => {
-  const app = createApp(dataDir, { logging: false });
+  const app = createApp(dataDir, { logging: false, recoveryMailer: async (message) => { recoveryMessages.push(message); } });
   store = app.store;
   server = app.server;
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -110,10 +112,12 @@ describe("SoulWine API", () => {
   it("khôi phục quyền truy cập qua OTP: quên mật khẩu → mã OTP → đặt lại → đăng nhập", async () => {
     const forgot = await api("POST", "/api/auth/forgot", { body: { email: emails.director } });
     assert.equal(forgot.status, 200);
-    const entry = store.list("outbox").at(-1);
-    assert.match(entry.code, /^\d{6}$/);
+    const { to, code } = recoveryMessages.at(-1);
+    assert.equal(to, emails.director);
+    assert.match(code, /^\d{6}$/);
+    assert.equal(Object.hasOwn(store.list("outbox").at(-1), "code"), false);
     assert.equal((await api("POST", "/api/auth/reset-password", { body: { email: emails.director, code: "000000", newPassword: "Kh0iPhuc@2026" } })).status, 400);
-    assert.equal((await api("POST", "/api/auth/reset-password", { body: { email: emails.director, code: entry.code, newPassword: "Kh0iPhuc@2026" } })).status, 200);
+    assert.equal((await api("POST", "/api/auth/reset-password", { body: { email: emails.director, code, newPassword: "Kh0iPhuc@2026" } })).status, 200);
     assert.equal((await api("POST", "/api/auth/login", { body: { email: emails.director, password: "SW-Giamdoc@2026" } })).status, 401);
     const recovered = await api("POST", "/api/auth/login", { body: { email: emails.director, password: "Kh0iPhuc@2026" } });
     assert.equal(recovered.status, 200);
@@ -315,5 +319,44 @@ describe("SoulWine API", () => {
     assert.equal(firstLogin.status, 200);
     assert.equal(firstLogin.data.mustChange, true);
     assert.ok(store.journal.some((event) => event.kind === "activity" && /cấp lại mật khẩu/.test(event.summary || "")));
+  });
+
+  it("đồng bộ workspace dùng chung: yêu cầu phiên, kiểm soát phiên bản và ghi nhật ký", async () => {
+    assert.equal((await api("GET", "/api/workspace")).status, 401);
+    assert.equal((await api("PUT", "/api/workspace", { body: { version: 1, baseRevision: 0, data: {} } })).status, 401);
+    const director = await login("director", { selectRole: true });
+    const empty = await api("GET", "/api/workspace", { token: director });
+    assert.equal(empty.status, 200);
+    assert.deepEqual(empty.data, { exists: false, revision: 0, savedAt: null });
+    const blob = { users: [{ id: "U-001" }], settings: { organization: { name: "SoulWine" } }, note: "bản dùng chung kiểm thử" };
+    const first = await api("PUT", "/api/workspace", { token: director, body: { version: 1, baseRevision: 0, data: blob } });
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    assert.equal(first.data.revision, 1);
+    const stale = await api("PUT", "/api/workspace", { token: director, body: { version: 1, baseRevision: 0, data: blob } });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.data.code, "workspace_conflict");
+    assert.equal(stale.data.details.currentRevision, 1);
+    assert.equal((await api("PUT", "/api/workspace", { token: director, body: { version: 2, baseRevision: 1, data: blob } })).status, 400);
+    assert.equal((await api("PUT", "/api/workspace", { token: director, body: { version: 1, baseRevision: -1, data: blob } })).status, 400);
+    const accountant = await login("accountant");
+    const meta = await api("GET", "/api/workspace?meta=1", { token: accountant });
+    assert.equal(meta.status, 200);
+    assert.deepEqual(meta.data, { exists: true, revision: 1, savedAt: first.data.savedAt });
+    const full = await api("GET", "/api/workspace", { token: accountant });
+    assert.equal(full.status, 200);
+    assert.equal(full.data.version, 1);
+    assert.equal(full.data.revision, 1);
+    assert.equal(full.data.data.note, "bản dùng chung kiểm thử");
+    const second = await api("PUT", "/api/workspace", { token: accountant, body: { version: 1, baseRevision: 1, data: { ...blob, note: "kế toán cập nhật" } } });
+    assert.equal(second.status, 200);
+    assert.equal(second.data.revision, 2);
+    const syncEvents = store.journal.filter((event) => event.action === "workspace.sync");
+    assert.equal(syncEvents.length, 2);
+    assert.ok(syncEvents.every((event) => event.kind === "activity" && /bản dữ liệu dùng chung/.test(event.summary || "")));
+    assert.ok(syncEvents.every((event) => event.entity === "sharedWorkspace" && !event.changes));
+    const reopened = createApp(dataDir, { logging: false });
+    reopened.store.refresh();
+    assert.equal(readSharedWorkspace(reopened.store).revision, 2);
+    reopened.store.close();
   });
 });

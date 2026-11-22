@@ -2,7 +2,7 @@ const WORKSPACE_KEY = "soulwine.workspace.v1";
 const PROFILE_KEY = "soulwine.profile";
 const DEFAULT_SETTINGS = {
   organization: { name: "SoulWine", taxId: "", address: "", representative: "", phone: "", email: "" },
-  rules: { receiptTolerance: null, quoteValidityDays: 30, holdDays: null, approvalHours: null, quoteReminderDays: 3, shipmentReminderDays: 5, workStart: "08:00", workEnd: "17:00" },
+  rules: { receiptTolerance: null, quoteValidityDays: 30, holdDays: null, approvalHours: null, quoteReminderDays: 3, shipmentReminderDays: 5, workStart: "08:00", workEnd: "17:00", allowStocktakeCancellation: false },
   notifications: { shipment: true, quote: true, approval: true, stock: true, payment: true },
   display: { density: "comfortable", pageSize: 10 }
 };
@@ -88,6 +88,7 @@ function persistWorkspace() {
     const revision = workspaceStatus.revision + 1;
     localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ version: 1, revision, savedAt, data: JSON.parse(serialized) }));
     Object.assign(workspaceStatus, { revision, savedAt, serialized, error: "" });
+    if (serverSyncConnected()) serverSyncPushLocal();
     return true;
   } catch (error) { workspaceStatus.error = error.name === "QuotaExceededError" ? "quota" : "unavailable"; return false; }
 }
@@ -101,14 +102,17 @@ function scheduleWorkspaceSave() {
 
 function renderStorageStatus() {
   const element = document.getElementById("save-status");
+  const syncFailed = serverSyncConnected() === false && serverSync.enabled && serverSync.token && ["authFailed", "unreachable", "conflict"].includes(serverSync.state);
   if (element) {
-    element.textContent = workspaceStatus.conflict ? "Có cập nhật mới" : workspaceStatus.error ? "Chưa lưu được" : "Đã lưu trên thiết bị";
-    element.dataset.state = workspaceStatus.error || workspaceStatus.conflict ? "error" : "saved";
-    element.title = workspaceStatus.savedAt ? `Lưu gần nhất ${new Date(workspaceStatus.savedAt).toLocaleString("vi-VN")}. Dữ liệu không đồng bộ sang thiết bị khác.` : "Dữ liệu được lưu trong trình duyệt hiện tại.";
+    const synced = serverSync.enabled && serverSync.token;
+    element.textContent = workspaceStatus.conflict ? "Có cập nhật mới" : workspaceStatus.error ? "Chưa lưu được" : synced ? serverSync.state === "active" ? "Đã đồng bộ máy chủ" : "Đang đồng bộ…" : "Đã lưu trên thiết bị";
+    element.dataset.state = workspaceStatus.error || workspaceStatus.conflict || (synced && serverSync.state !== "active") ? "error" : "saved";
+    element.title = workspaceStatus.savedAt ? `Lưu gần nhất ${new Date(workspaceStatus.savedAt).toLocaleString("vi-VN")}.${serverSync.enabled ? " Bản dùng chung được đồng bộ qua máy chủ khi kết nối hoạt động." : " Dữ liệu không đồng bộ sang thiết bị khác khi chưa kết nối máy chủ."}` : "Dữ liệu được lưu trong trình duyệt hiện tại.";
   }
   const root = document.getElementById("workspace-notices");
   if (!root) return;
-  root.innerHTML = workspaceStatus.conflict ? `<div class="banner warning">${icon("alert")}<div><strong>Dữ liệu đã thay đổi ở cửa sổ khác.</strong> Các thay đổi hiện tại chưa được ghi đè. Tải phiên bản mới trước khi tiếp tục.</div><button class="btn btn-secondary btn-sm" data-action="reload-workspace">Tải dữ liệu mới</button></div>`
+  root.innerHTML = workspaceStatus.conflict ? `<div class="banner warning">${icon("alert")}<div><strong>Dữ liệu đã thay đổi từ người khác.</strong> Các thay đổi hiện tại chưa được ghi đè. Tải phiên bản mới trước khi tiếp tục.</div><button class="btn btn-secondary btn-sm" data-action="reload-workspace">Tải dữ liệu mới</button></div>`
+    : syncFailed ? `<div class="banner warning">${icon("alert")}<div><strong>Đồng bộ máy chủ tạm dừng.</strong> ${escapeHtml(serverSync.lastError || "Đăng nhập lại để tiếp tục đồng bộ dữ liệu dùng chung.")} Dữ liệu vẫn được lưu trên thiết bị.</div><button class="btn btn-secondary btn-sm" data-action="retry-save">Thử lưu lại</button></div>`
     : workspaceStatus.error && workspaceStatus.error !== "corrupt" ? `<div class="banner danger">${icon("alert")}<div><strong>Chưa thể lưu trên thiết bị.</strong> ${workspaceStatus.error === "quota" ? "Dung lượng trình duyệt không đủ. Tải bản sao lưu và giải phóng dung lượng." : "Kiểm tra quyền lưu dữ liệu của trình duyệt. Thay đổi hiện vẫn ở bộ nhớ của trang."}</div><button class="btn btn-secondary btn-sm" data-action="retry-save">Thử lưu lại</button><button class="btn btn-secondary btn-sm" data-action="backup-workspace">Sao lưu</button></div>` : "";
 }
 
@@ -155,11 +159,23 @@ function salesAnalytics() {
     const channel = order.type === "Bán sỉ" ? "Bán sỉ" : `Bán lẻ · ${order.channel}`;
     channels.set(channel, (channels.get(channel) || 0) + order.total);
     people.set(order.owner, (people.get(order.owner) || 0) + order.total);
-    const totalWeight = order.lines.reduce((sum, line) => sum + productBySku(line.sku).retail * line.qty, 0);
-    let allocated = 0;
+    let weights = order.lines.map((line) => {
+      const gross = (line.price ?? 0) * line.qty;
+      return Math.max(0, gross - Math.round(gross * ((line.discount ?? 0) / 100)));
+    });
+    let totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    if (!totalWeight && order.total > 0) {
+      // If an older order has no usable price snapshot, allocate its booked total by stored quantity.
+      weights = order.lines.map((line) => line.qty);
+      totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    }
+    let allocated = 0, cumulativeWeight = 0;
     order.lines.forEach((line, index) => {
-      const value = index === order.lines.length - 1 ? order.total - allocated : Math.round(order.total * productBySku(line.sku).retail * line.qty / Math.max(totalWeight, 1));
-      allocated += value;
+      cumulativeWeight += weights[index];
+      // Round the running amount so line allocations reconcile without a negative rounding remainder.
+      const nextAllocated = index === order.lines.length - 1 ? order.total : totalWeight === order.total ? cumulativeWeight : Math.round(order.total * (cumulativeWeight / (totalWeight || 1)));
+      const value = nextAllocated - allocated;
+      allocated = nextAllocated;
       const previous = products.get(line.sku) || { qty: 0, value: 0 };
       products.set(line.sku, { qty: previous.qty + line.qty, value: previous.value + value });
     });
@@ -190,18 +206,25 @@ function operationalMetrics() {
   const reservations = state.reservations.filter((item) => item.status === "holding");
   const violations = new Set(reservations.filter((item) => !orderByCode(item.order) || !orderEligible(orderByCode(item.order)) || productBySku(item.sku).held > productBySku(item.sku).physical - productBySku(item.sku).damaged).map((item) => item.order)).size;
   const ratio = (records, test) => records.length ? Math.round(records.filter(test).length / records.length * 100) : null;
-  const issueOrders = state.orders.filter((order) => order.readyForIssueAt && order.issueRequestedAt);
-  const deliveries = state.deliveries.filter((delivery) => delivery.resultReceivedAt && delivery.resultRecordedAt);
+  const elapsed = (start, end) => new Date(end).valueOf() - new Date(start).valueOf();
+  const within = (start, end, minutes) => !!start && !!end && elapsed(start, end) >= 0 && elapsed(start, end) <= minutes * 60000;
+  const issueOrders = state.orders.flatMap((order) => {
+    const byReadiness = new Map();
+    for (const item of order.issueRequests || []) if (!byReadiness.has(item.readyAt)) byReadiness.set(item.readyAt, item);
+    if (order.issueReadiness?.readyAt && !order.issueReadiness.requestedAt && elapsed(order.issueReadiness.readyAt, Date.now()) >= 900000) byReadiness.set(order.issueReadiness.readyAt, order.issueReadiness);
+    return [...byReadiness.values()];
+  });
+  const deliveries = state.deliveries.flatMap((delivery) => delivery.attempts || (delivery.resultReceivedAt ? [delivery] : []));
   const counts = state.stocktakes.filter((period) => period.status === "completed" && period.closedLines).flatMap((period) => period.closedLines);
   const payments = state.payments.filter((payment) => payment.status === "confirmed" && payment.evidenceReadyAt && payment.confirmedAt);
-  const returns = state.returns.filter((item) => item.receivedAt && item.postedAt);
+  const returns = state.returns.filter((item) => item.receivedAt && Number.isFinite(new Date(item.receivedAt).valueOf()) && (item.returnKind === "undelivered" && item.receivedQty > 0 || !item.returnKind && item.delivery && ["failed", "returned"].includes(state.deliveries.find((delivery) => delivery.code === item.delivery)?.status)));
   return [
     { code: "K01", label: "Giữ vượt tồn", value: violations, count: reservations.length, target: "0 đơn vượt tồn · 100% có cọc/đủ tiền", route: "reservations", good: violations === 0, help: "Đối chiếu lượng giữ đang hiệu lực với tồn vật lý, hàng lỗi và điều kiện thanh toán." },
-    { code: "K02", label: "Yêu cầu xuất đúng hạn", value: ratio(issueOrders, (item) => (new Date(item.issueRequestedAt) - new Date(item.readyForIssueAt)) / 60000 <= 15), count: issueOrders.length, target: "≥ 90% trong 15 phút", route: "orders", help: "Đo từ lúc đã đủ tiền, kiểm tra tồn và giữ hàng đến lúc yêu cầu xuất." },
-    { code: "K03", label: "Cập nhật giao đúng hạn", value: ratio(deliveries, (item) => (new Date(item.resultRecordedAt) - new Date(item.resultReceivedAt)) / 60000 <= 30), count: deliveries.length, target: "≥ 95% trong 30 phút", route: "deliveries", help: "Cần thời điểm nhận xác nhận giao hàng và thời điểm ghi kết quả." },
+    { code: "K02", label: "Yêu cầu xuất đúng hạn", value: ratio(issueOrders, (item) => within(item.readyAt, item.requestedAt, 15)), count: issueOrders.length, target: "≥ 90% trong 15 phút", route: "orders", help: "Từ lúc đủ điều kiện và giữ đủ hàng đến yêu cầu của Bán hàng; quá hạn mà chưa gửi cũng được tính." },
+    { code: "K03", label: "Cập nhật giao đúng hạn", value: ratio(deliveries, (item) => within(item.resultReceivedAt, item.resultRecordedAt, 30)), count: deliveries.length, target: "≥ 95% trong 30 phút", route: "deliveries", help: "Đo từng lần giao từ lúc xác nhận thực tế đến lúc lưu kết quả." },
     { code: "K04", label: "Khớp sau đối chiếu", value: ratio(counts, (item) => item.final === item.count), count: counts.length, target: "≥ 98% mã khớp sau đối chiếu", route: "stocktakes", help: "Đối chiếu số thực tế và tồn chốt của các kỳ đã hoàn tất." },
-    { code: "K05", label: "Xác nhận tiền đúng hạn", value: ratio(payments, (item) => businessMinutesBetween(item.evidenceReadyAt, item.confirmedAt) <= 15), count: payments.length, target: "≥ 90% trong 15 phút làm việc", route: "payments", help: `Giờ làm việc ${state.settings.rules.workStart}–${state.settings.rules.workEnd}, thứ Hai–thứ Sáu.` },
-    { code: "K06", label: "Hàng hoàn trong ngày", value: ratio(returns, (item) => new Date(item.receivedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) === new Date(item.postedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })), count: returns.length, target: "100% hàng đã trả về", route: "returns", help: "Tính từ ngày nhận lại hàng thực tế đến ngày ghi nhập hàng hoàn." }
+    { code: "K05", label: "Xác nhận tiền đúng hạn", value: ratio(payments, (item) => { const minutes = businessMinutesBetween(item.evidenceReadyAt, item.confirmedAt); return minutes !== null && minutes <= 15; }), count: payments.length, target: "≥ 90% trong 15 phút làm việc", route: "payments", help: `Giờ làm việc ${state.settings.rules.workStart}–${state.settings.rules.workEnd}, thứ Hai–thứ Sáu.` },
+    { code: "K06", label: "Hàng hoàn trong ngày", value: ratio(returns, (item) => item.postedAt && elapsed(item.receivedAt, item.postedAt) >= 0 && new Date(item.receivedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) === new Date(item.postedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })), count: returns.length, target: "100% hàng giao không thành công đã nhận về", route: "returns", help: "Tính cả hàng đã nhận về nhưng chưa ghi nhập; đối chiếu cùng ngày theo giờ Việt Nam." }
   ];
 }
 
@@ -245,6 +268,7 @@ function recalculateNotifications() {
     const overdue = created && state.settings.rules.approvalHours !== null && businessMinutesBetween(created, new Date().toISOString()) > state.settings.rules.approvalHours * 60;
     add(`approval:${item.id}`, `${item.ref} ${overdue ? "quá hạn phản hồi" : "chờ xử lý"}`, item.title, "approvals", [item.assignee]);
   });
+  if (preferences.approval) state.orders.filter((order) => order.issueRequest?.status === "pending").forEach((order) => add(`issue:${order.code}:${order.issueRequest.requestedAt}`, `${order.code} chờ xác nhận xuất`, `Yêu cầu từ ${order.issueRequest.requestedBy}`, `orders/${encodeURIComponent(order.code)}`, ["warehouse_manager"]));
   if (preferences.payment) state.payments.filter((item) => item.status === "pending_confirm").forEach((item) => add(`payment:${item.id}`, `${item.id} cần xác nhận thanh toán`, `${item.record} · ${money(item.amount)}`, "payments", ["accountant"]));
   if (preferences.stock) state.products.filter((product) => product.status === "product_active" && availableOf(product) < product.min).forEach((product) => add(`stock:${product.sku}`, `${product.sku} dưới định mức tồn`, `Khả dụng ${availableOf(product)} / định mức ${product.min}`, "availability"));
   if (preferences.shipment) state.contracts.forEach((contract) => contract.shipments.filter((shipment) => shipment.status !== "delivered").forEach((shipment, index) => {

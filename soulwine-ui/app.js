@@ -126,10 +126,10 @@ function render(preserveScroll = false) {
     viewElement.innerHTML = `${pageHead({ title: "Chưa thể mở nội dung" })}<section class="card">${emptyState("alert", "Có lỗi khi hiển thị dữ liệu", "Các dữ liệu đã lưu không bị thay đổi. Thử mở lại nội dung hoặc tải bản sao lưu để kiểm tra.", '<button class="btn btn-primary" data-action="retry-view">Thử lại</button><button class="btn btn-secondary" data-action="backup-workspace">Tải bản sao lưu</button>')}</section>`;
   }
   viewElement.querySelectorAll("[data-action]").forEach((element) => {
-    const roles = ACTION_ROLES[element.dataset.action];
+    const roles = actionRoles(element.dataset.action);
     if (roles && !roles.includes(state.role)) {
       element.disabled = true;
-      element.title = `Thao tác thuộc quyền ${roles.map((role) => ROLES[role].label).join(" / ")}.`;
+      element.title = roles.length ? `Thao tác thuộc quyền ${roles.map((role) => ROLES[role].label).join(" / ")}.` : "Thao tác đã bị tắt trong ma trận quyền.";
     }
   });
   if (route === "quotes" && param) lockQuoteEditor();
@@ -360,7 +360,206 @@ function refreshList(kind) {
   }
 }
 
+function canUseReport(roles) {
+  return state.loggedIn && roles.includes(state.role) && state.users.some((user) => user.id === state.activeUserId && user.status === "user_active" && user.roleIds?.includes(state.role));
+}
+
+function canViewInventoryReport() { return canUseReport(["director", "accountant", "warehouse_manager"]); }
+function canExportApprovalHistory() { return canUseReport(["director", "accountant"]); }
+
+const inventoryDayFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit" });
+const inventoryReportFields = ["opening", "initialized", "incoming", "outgoing", "adjustment", "closing"];
+const inventoryReportColumns = ["SKU", "Sản phẩm", "Nhóm sản phẩm", "Tồn đầu", "Số dư khởi tạo", "Nhập", "Xuất", "Điều chỉnh", "Tồn cuối"];
+const inventoryBalanceNote = "Tồn đầu + số dư khởi tạo + nhập (gồm hàng hoàn) − xuất + điều chỉnh = tồn cuối. Ngày giao dịch theo giờ Việt Nam; tính cả ngày bắt đầu và ngày kết thúc.";
+
+function validReportDay(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(+date) && date.toISOString().slice(0, 10) === value;
+}
+
+function inventoryLocalDay(date) { return inventoryDayFormat.format(date).split("/").reverse().join("-"); }
+
+function inventoryMoveDay(move) {
+  for (const stamp of [move.timestamp, move.at, move.time]) {
+    if (typeof stamp !== "string") continue;
+    const legacy = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s|$)/.exec(stamp);
+    const date = legacy ? `${legacy[3]}-${legacy[2]}-${legacy[1]}` : stamp.slice(0, 10);
+    if (!validReportDay(date)) continue;
+    if (!legacy && /T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(stamp)) {
+      const instant = new Date(stamp);
+      if (Number.isFinite(+instant)) return inventoryLocalDay(instant);
+    } else if (legacy || stamp === date || /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(stamp)) return date;
+  }
+  return "";
+}
+
+function inventoryReport() {
+  const { from = "", to = "", category = "" } = state.ui.inventoryReportFilter || {};
+  const categories = [...new Set(state.products.map((product) => product.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "vi"));
+  const rows = state.products.filter((product) => !category || product.category === category).map((product) => ({ product, after: 0, initialized: 0, incoming: 0, outgoing: 0, adjustment: 0, incomplete: false }));
+  const bySku = new Map(rows.map((row) => [row.product.sku, row]));
+  const hasPeriod = Boolean(from || to);
+  for (const move of state.movements) {
+    const row = bySku.get(move.sku);
+    if (!row) continue;
+    const isInitialization = move.type === "Tồn đầu kỳ" || (move.type === "Nhập kho" && move.note === "Số dư đầu kỳ");
+    const field = isInitialization ? "initialized" : ["Nhập kho", "Hàng hoàn"].includes(move.type) ? "incoming" : move.type === "Xuất kho" ? "outgoing" : "adjustment";
+    const legacyDelta = field === "outgoing" ? -Math.abs(move.qty) : field !== "adjustment" || move.type === "Điều chỉnh tồn" ? move.qty : 0;
+    const delta = move.physicalDelta ?? legacyDelta;
+    if (delta === 0) continue;
+    const day = hasPeriod ? inventoryMoveDay(move) : "";
+    if (!Number.isSafeInteger(delta) || (hasPeriod && !day)) { row.incomplete = true; continue; }
+    if (from && day < from) continue;
+    if (to && day > to) row.after += delta;
+    else row[field] += field === "outgoing" ? -delta : delta;
+  }
+
+  // Roll back the live physical balance past the end date, then undo just the in-period movement.
+  for (const row of rows) {
+    row.closing = row.product.physical - row.after;
+    row.opening = row.closing - row.initialized - row.incoming + row.outgoing - row.adjustment;
+    row.incomplete ||= !Number.isSafeInteger(row.opening) || !Number.isSafeInteger(row.closing) || row.opening < 0 || row.closing < 0;
+  }
+  const incomplete = rows.some((row) => row.incomplete);
+  const totals = Object.fromEntries(inventoryReportFields.map((field) => [field, incomplete ? null : rows.reduce((sum, row) => sum + row[field], 0)]));
+  const formatDay = (value) => value.split("-").reverse().join("/");
+  const range = !hasPeriod ? "Toàn bộ thời gian" : `${from ? `Từ ${formatDay(from)}` : "Từ đầu dữ liệu"} ${to ? `đến ${formatDay(to)}` : "đến hiện tại"}`;
+  const filters = `Kỳ: ${range} · Nhóm sản phẩm: ${category || "Tất cả"}`;
+  const notes = [inventoryBalanceNote];
+  if (incomplete) notes.push("Không thể đối chiếu các SKU đánh dấu ‘—’ do biến động kho thiếu dữ liệu hoặc số dư không hợp lệ. Tổng kỳ được ẩn khi còn SKU chưa đối chiếu được.");
+  const cells = rows.map((row) => [row.product.sku, row.product.name, row.product.category || "—", ...inventoryReportFields.map((field) => row.incomplete ? "—" : row[field])]);
+  return { from, to, category, categories, rows, totals, filters, notes, cells };
+}
+
+function inventoryReportView(report) {
+  const { from, to, category, categories, rows, totals, filters, notes, cells } = report;
+  const snapshot = (value) => value === null ? "—" : num(value);
+  const products = rows.map((row) => row.product);
+  const skuSet = new Set(products.map((product) => product.sku));
+  const low = products.filter((product) => availableOf(product) < product.min);
+  const holding = state.reservations.filter((reservation) => reservation.status === "holding" && skuSet.has(reservation.sku));
+  return `<div class="card-body">
+    <form id="inventory-report-filters" class="form-grid three mb-16">
+      <div class="field"><label for="inventory-report-from">Từ ngày</label><input class="input" id="inventory-report-from" name="from" type="date" value="${escapeHtml(from)}"></div>
+      <div class="field"><label for="inventory-report-to">Đến ngày</label><input class="input" id="inventory-report-to" name="to" type="date" value="${escapeHtml(to)}"></div>
+      <div class="field"><label for="inventory-report-category">Nhóm sản phẩm</label><select class="select" id="inventory-report-category" name="category"><option value="">Tất cả nhóm</option>${categories.map((name) => `<option value="${escapeHtml(name)}" ${category === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></div>
+      <button class="btn btn-primary" type="submit">Áp dụng bộ lọc</button>
+    </form>
+    <p class="hint mb-12">Bộ lọc đang áp dụng cho bảng và tệp xuất: ${escapeHtml(filters)} · ${rows.length} SKU</p>
+    <div class="stat-strip mb-16">${[["Tồn đầu kỳ", "opening"], ["Nhập trong kỳ", "incoming"], ["Xuất trong kỳ", "outgoing"], ["Tồn cuối kỳ", "closing"]].map(([label, field]) => `<div><div class="label">${label}</div><div class="value">${snapshot(totals[field])}</div></div>`).join("")}</div>
+    ${notes.map((note) => `<p class="hint mb-12">${escapeHtml(note)}</p>`).join("")}
+    ${dataTable(inventoryReportColumns.map((label, index) => ({ label, align: index >= 3 ? "num" : "" })), cells.map((row) => ({ cells: row.map((value) => typeof value === "number" ? num(value) : escapeHtml(value)) })), { minWidth: 980, empty: emptyState("box", "Không có SKU trong bộ lọc", "Đổi nhóm sản phẩm để xem dữ liệu.") })}
+    ${rows.length ? `<p class="hint mt-24 mb-12">Thông tin tồn hiện tại của nhóm đang chọn, không tính theo kỳ báo cáo và không đưa vào tệp xuất.</p>
+    <div class="grid grid-even">
+      <div>${card({ title: "Sản phẩm dưới định mức hiện tại", iconName: "alert", body: low.length ? `<div class="rule-list">${low.map((product) => `<div class="rule-item">${productCell(product.sku)}<strong>${num(availableOf(product))} / ${num(product.min)}</strong></div>`).join("")}</div>` : emptyState("shield", "Không có SKU dưới định mức", "Cảnh báo được tính từ tồn khả dụng hiện tại.") })}</div>
+      <div>${card({ title: "Hàng hiện đang giữ theo đơn", iconName: "lock", body: holding.length ? `<div class="bar-list">${holding.map((reservation) => `<div class="bar-row"><span class="bar-label">${escapeHtml(reservation.order)} · ${escapeHtml(productName(reservation.sku))}</span><span class="bar-value">${num(reservation.qty)}</span></div>`).join("")}</div>` : emptyState("lock", "Chưa có hàng đang giữ", "Chỉ tính hàng đang giữ của nhóm được chọn.") })}</div>
+    </div>` : ""}
+  </div>`;
+}
+
+function reportExportActions(action, enabled = true) {
+  const disabled = enabled ? "" : " disabled";
+  return `<button type="button" class="btn btn-secondary" data-action="${action}"${disabled}>${icon("download")} Xuất Excel (.xlsx)</button><button type="button" class="btn btn-secondary" data-action="${action}-pdf"${disabled}>${icon("file")} In / Lưu PDF</button>`;
+}
+
+function zipReportParts(parts) {
+  const encoder = new TextEncoder();
+  const files = [], directory = [];
+  let offset = 0, directorySize = 0;
+  for (const [path, contents] of Object.entries(parts)) {
+    const name = encoder.encode(path), data = encoder.encode(contents);
+    let crc = -1;
+    for (const byte of data) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    crc = ~crc;
+
+    // ZIP local file and central directory headers, using the store (uncompressed) method.
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(12, 33, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, name.length, true);
+    const entry = new DataView(new ArrayBuffer(46));
+    entry.setUint32(0, 0x02014b50, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(14, 33, true);
+    entry.setUint32(16, crc, true); entry.setUint32(20, data.length, true); entry.setUint32(24, data.length, true); entry.setUint16(28, name.length, true); entry.setUint32(42, offset, true);
+    files.push(local.buffer, name, data);
+    directory.push(entry.buffer, name);
+    offset += 30 + name.length + data.length;
+    directorySize += 46 + name.length;
+  }
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, directory.length / 2, true); end.setUint16(10, directory.length / 2, true);
+  end.setUint32(12, directorySize, true); end.setUint32(16, offset, true);
+  return new Blob([...files, ...directory, end.buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+function reportWorkbook({ title, filters, notes = [], columns, rows }) {
+  const xml = (value) => escapeHtml(String(value ?? "").replace(/[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, ""));
+  const sheetColumns = columns.map((label, index) => {
+    const width = rows.reduce((max, row) => Math.max(max, Math.min(48, String(row[index] ?? "").length + 2)), Math.max(10, label.length + 2));
+    return `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`;
+  }).join("");
+  const sheetRows = [[title], ...(filters ? [[filters]] : []), ...notes.map((note) => [note]), [], columns, ...rows];
+  const sheetData = sheetRows.map((row, index) => `<row r="${index + 1}">${row.map((value, column) => {
+    const ref = `${String.fromCharCode(65 + column)}${index + 1}`;
+    // Inline strings are never interpreted as Excel formulas, even when they start with '='.
+    return typeof value === "number" && Number.isFinite(value) ? `<c r="${ref}"><v>${value}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(value)}</t></is></c>`;
+  }).join("")}</row>`).join("");
+  const spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  const officeRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const packageRelationships = "http://schemas.openxmlformats.org/package/2006/relationships";
+  return zipReportParts({
+    "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+    "_rels/.rels": `<Relationships xmlns="${packageRelationships}"><Relationship Id="rId1" Type="${officeRelationships}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    "xl/workbook.xml": `<workbook xmlns="${spreadsheet}" xmlns:r="${officeRelationships}"><sheets><sheet name="Báo cáo" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    "xl/_rels/workbook.xml.rels": `<Relationships xmlns="${packageRelationships}"><Relationship Id="rId1" Type="${officeRelationships}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="${spreadsheet}"><cols>${sheetColumns}</cols><sheetData>${sheetData}</sheetData></worksheet>`
+  });
+}
+
+function printReport({ title, filters, notes = [], columns, rows }) {
+  const popup = window.open("", "_blank");
+  if (!popup) return toast("Trình duyệt đã chặn cửa sổ in. Cho phép cửa sổ bật lên rồi thử lại.", "warning");
+  popup.opener = null;
+  const text = escapeHtml;
+  popup.document.write(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>${text(title)}</title><style>
+    body{font:13px/1.5 'Segoe UI',sans-serif;color:#211d4f;margin:24px}h1{margin:8px 0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #999;padding:6px;text-align:left;overflow-wrap:anywhere}th{background:#eeecf5}.num{text-align:right}button{padding:8px 12px;cursor:pointer}
+    @page{size:A4 landscape;margin:12mm}@media print{body{margin:0}button{display:none}thead{display:table-header-group}tr{break-inside:avoid}}
+    </style></head><body><b>${text(state.settings.organization.name)}</b><h1>${text(title)}</h1>
+    ${filters ? `<p>${text(filters)}</p>` : ""}${notes.map((note) => `<p>${text(note)}</p>`).join("")}
+    <p>Ngày xuất: ${text(nowStamp())} · ${rows.length} bản ghi</p><button type="button" onclick="window.print()">In / Lưu thành PDF</button>
+    <table><thead><tr>${columns.map((column) => `<th scope="col">${text(column)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value) => typeof value === "number" ? `<td class="num">${num(value)}</td>` : `<td>${text(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></body></html>`);
+  popup.document.close();
+}
+
+function exportReportDocument(action, format) {
+  let data;
+  if (action === "export-inventory") {
+    if (!canViewInventoryReport()) return toast("Bạn không có quyền xuất báo cáo tồn kho.", "warning");
+    const report = inventoryReport();
+    data = { title: "Nhập - xuất - tồn", filters: report.filters, notes: report.notes, columns: inventoryReportColumns, rows: report.cells };
+  } else {
+    if (!canExportApprovalHistory()) return toast("Bạn không có quyền xuất lịch sử phê duyệt.", "warning");
+    if (action === "export-audit") {
+      const search = state.ui.auditSearch.trim();
+      data = { title: "Nhật ký xử lý và phê duyệt", filters: search ? `Tìm kiếm: ${search}` : "Không giới hạn từ khóa", columns: ["Thời điểm", "Nhân sự", "Vai trò", "Hành động", "Đối tượng", "Chi tiết"], rows: filteredAudit().map((item) => [item.time, item.actor, item.role, item.action, item.object, item.detail]) };
+    } else if (action === "export-approvals") {
+      const scope = state.role === "director" ? "Mọi vai trò xử lý" : "Hồ sơ do Kế toán xử lý";
+      const status = { pending: "Chờ xử lý", resolved: "Đã xử lý", all: "Tất cả" }[state.ui.approvalFilter];
+      data = { title: "Lịch sử phê duyệt", filters: `Phạm vi: ${scope} · Trạng thái: ${status || "Tất cả"}`, columns: ["Mã", "Loại", "Tham chiếu", "Người gửi", "Trạng thái", "Lý do"], rows: visibleApprovals().map((item) => [item.id, item.title, item.ref, item.requester, STATUS_META[item.status]?.label, item.decisionNote]) };
+    }
+  }
+  if (!data) return;
+  if (!data.rows.length) return toast("Không có dữ liệu trong phạm vi đang chọn để xuất.", "info");
+  if (format === "pdf") return printReport(data);
+  downloadBlob(reportWorkbook(data), `SoulWine-${data.title}.xlsx`);
+  toast("Đã xuất tệp Excel (.xlsx).");
+}
+
 function exportData(action) {
+  const documentAction = action.replace(/-pdf$/, "");
+  if (["export-inventory", "export-audit", "export-approvals"].includes(documentAction)) return exportReportDocument(documentAction, action.endsWith("-pdf") ? "pdf" : "xlsx");
   const collections = {
     "export-orders": ["Đơn hàng", ["Mã", "Khách hàng", "Loại", "Giá trị", "Đã thu", "Trạng thái"], filteredOrders().map((item) => [item.code, customerName(item.customerId), item.type, item.total, item.paid, STATUS_META[item.status]?.label])],
     "export-quotes": ["Báo giá", ["Mã", "Khách hàng", "Tạm tính", "Chiết khấu", "Tổng", "Trạng thái"], filteredQuotes().map((item) => [item.code, customerName(item.customerId), quoteTotals(item).subtotal, quoteTotals(item).discount, quoteTotals(item).total, STATUS_META[item.status]?.label])],
@@ -370,8 +569,6 @@ function exportData(action) {
     "export-customers": ["Khách hàng", ["Mã", "Tên", "Nhóm", "Điện thoại", "Email", "Địa chỉ"], filteredCustomers().map((item) => [item.id, item.name, item.type, item.phone, item.email, item.address])],
     "export-products": ["Sản phẩm", ["SKU", "Tên", "Giá lẻ", "Giá sỉ", "ĐVT", "Xuất xứ"], filteredProducts().map((item) => [item.sku, item.name, item.retail, item.wholesale, item.unit, item.origin])],
     "export-availability": ["Tồn kho", ["SKU", "Tên", "Tồn vật lý", "Giữ", "Lỗi", "Khả dụng"], filteredAvailability().map((item) => [item.sku, item.name, item.physical, item.held, item.damaged, availableOf(item)])],
-    "export-audit": ["Nhật ký", ["Thời điểm", "Nhân sự", "Vai trò", "Hành động", "Đối tượng", "Chi tiết"], filteredAudit().map((item) => [item.time, item.actor, item.role, item.action, item.object, item.detail])],
-    "export-approvals": ["Phê duyệt", ["Mã", "Loại", "Tham chiếu", "Người gửi", "Trạng thái", "Lý do"], state.approvals.map((item) => [item.id, item.title, item.ref, item.requester, STATUS_META[item.status]?.label, item.decisionNote])],
     "export-movements": ["Thẻ kho", ["Thời gian", "SKU", "Loại", "SL", "Tồn vật lý", "Giữ", "Chứng từ", "Nhân sự"], filteredMovements().map((item) => [item.time, item.sku, item.type, item.qty, item.physical, item.held, item.ref, item.user])]
   };
   const otherCollections = {
@@ -397,8 +594,8 @@ function exportData(action) {
     const table = document.querySelector("table.matrix");
     if (table) data = ["Vai trò và quyền hạn", [...table.querySelectorAll("thead th")].map((cell) => cell.textContent.trim()), [...table.querySelectorAll("tbody tr")].map((row) => [...row.cells].map((cell) => cell.textContent.trim()))];
   }
-  if (action === "export-report" && state.ui.reportTab === "inventory") data = ["Nhập xuất tồn", ["SKU", "Sản phẩm", "Tồn đầu", "Nhập", "Xuất", "Điều chỉnh", "Tồn cuối", "Giữ", "Khả dụng"], inventoryReportRows().map((row) => [row.product.sku, row.product.name, row.opening, row.incoming, row.outgoing, row.adjustment, row.product.physical, row.product.held, availableOf(row.product)])];
-  if (!data) data = ["Chất lượng vận hành", ["Chỉ tiêu", "Tên", "Kết quả", "Số bản ghi đo lường", "Mục tiêu"], operationalMetrics().map((metric) => [metric.code, metric.label, metric.value ?? "Chưa đủ dữ liệu", metric.count, metric.target])];
+  if (action === "export-report" && state.ui.reportTab === "management") data = ["Chất lượng vận hành", ["Chỉ tiêu", "Tên", "Kết quả", "Số bản ghi đo lường", "Mục tiêu"], operationalMetrics().map((metric) => [metric.code, metric.label, metric.value ?? "Chưa đủ dữ liệu", metric.count, metric.target])];
+  if (!data) return;
   if (!data[2].length) return toast("Không có dữ liệu trong phạm vi đang chọn để xuất.", "info");
   const cell = (value) => {
     let text = String(value ?? "");
@@ -432,11 +629,18 @@ function printRecord(kind, code) {
   } else if (kind === "quote") {
     const quote = quoteByCode(code);
     if (!quote || !["approved", "confirmed"].includes(quote.status)) return toast("Chỉ xuất báo giá đã duyệt / xác nhận.", "warning");
+    if (quoteIsExpired(quote)) return toast("Báo giá đã hết hiệu lực. Tạo phiên bản mới trước khi xuất.", "warning");
     title = "BÁO GIÁ";
     meta = `<p>Khách hàng: <b>${text(customerName(quote.customerId))}</b></p><p>Số: ${text(code)} · Hiệu lực: ${text(quote.validUntil)} · Phiên bản v${quote.version}</p>`;
-    columns = ["Sản phẩm", "ĐVT", "SL", "Giá niêm yết", "CK %", "Thành tiền"];
-    rows = quote.lines.map((line) => { const product = productBySku(line.sku); const price = line.price ?? product.wholesale; return [product.name, product.unit, line.qty, money(price), line.discount, money(quoteLineTotal(line))]; });
-    total = `<p class="total">Tổng cộng: ${money(quoteTotals(quote).total)}</p><p>Điều khoản: ${text(quote.note)}</p>`;
+    columns = ["Sản phẩm", "ĐVT", "SL", "Giá niêm yết", "Chiết khấu dòng", "Thành tiền"];
+    rows = quote.lines.map((line) => {
+      const amounts = quoteLineTotals(line);
+      return [productName(line.sku), productBySku(line.sku)?.unit, line.qty, money(amounts.price), quoteDiscountLabel(quoteLineDiscount(line)), money(amounts.total)];
+    });
+    const totals = quoteTotals(quote);
+    const whole = quoteWholeDiscount(quote);
+    const rate = whole.mode === "percent" && whole.value ? ` (${text(quoteDiscountLabel(whole))})` : "";
+    total = `<p>Tạm tính: ${money(totals.subtotal)}<br>Chiết khấu dòng: ${discountMoney(totals.lineDiscount)}<br>Sau chiết khấu dòng: ${money(totals.afterLines)}<br>Chiết khấu toàn báo giá${rate}: ${discountMoney(totals.wholeDiscount)}</p><p class="total">Tổng cộng: ${money(totals.total)}</p><p>Điều khoản: ${text(quote.note)}</p>`;
   } else if (kind === "contract") {
     const contract = contractByCode(code);
     if (!contract) return;
@@ -448,14 +652,14 @@ function printRecord(kind, code) {
     const stocktake = stocktakeByCode(code);
     if (!stocktake) return;
     title = "BIÊN BẢN KIỂM KÊ";
-    meta = `<p>Số: ${text(code)} · Phạm vi: ${text(stocktake.scope)}</p><p>Bắt đầu: ${text(stocktake.started)}</p>`;
+    meta = `<p>Số: ${text(code)} · Phạm vi: ${text(stocktake.scope)}</p><p>Bắt đầu: ${text(stocktake.started)} · Trạng thái: ${text(STATUS_META[stocktake.status]?.label || stocktake.status)}</p>${stocktake.status === "cancelled" ? `<p>Kỳ đã hủy, không điều chỉnh tồn. Lý do: ${text(stocktake.cancellationReason || "")}</p>` : ""}`;
     columns = ["SKU", "Sản phẩm", "Sổ sách", "Thực tế", "Chênh lệch", "Ghi chú"];
     rows = stocktake.lines.map((line) => [line.sku, productName(line.sku), line.system, line.count ?? "Chưa đếm", line.count === null ? "—" : line.count - line.system, line.note]);
   } else if (kind === "receipt") {
     const receipt = receiptByCode(code);
     if (!receipt) return;
     title = "PHIẾU TIẾP NHẬN HÀNG";
-    meta = `<p>Số: ${text(code)} · Đơn đặt hàng: ${text(receipt.po)}</p><p>Nhà cung cấp: ${text(supplierName(receipt.supplier))}</p>`;
+    meta = receipt.source ? `<p>Số: ${text(code)} · Chứng từ nguồn: ${text(receipt.source)}</p><p>Kết quả đối chiếu: ${text(receipt.note)}</p>` : `<p>Số: ${text(code)} · Đơn đặt hàng: ${text(receipt.po)}</p><p>Nhà cung cấp: ${text(supplierName(receipt.supplier))}</p>`;
     columns = ["Sản phẩm", "Đặt", "Thực nhận", "Hàng đạt", "Hư hỏng"];
     rows = receipt.lines.map((line) => [productName(line.sku), line.ordered, line.received, line.good, line.damaged]);
   } else {
@@ -555,7 +759,7 @@ document.addEventListener("input", (event) => {
   if (target.dataset.stField) return updateStocktakeInput(target);
   if (target.dataset.rcField) return updateReceiptInput(target);
   if (target.closest("#action-form") && activeDialog) { activeDialog.dirty = true; if (activeDialog.input) activeDialog.input(); }
-  if (target.closest("#settings-form")) { state.ui.settingsDirty = true; document.getElementById("settings-save-note").textContent = "Có thay đổi chưa lưu"; }
+  if (target.closest("#settings-form") && !target.dataset.syncField) { state.ui.settingsDirty = true; const note = document.getElementById("settings-save-note"); if (note) note.textContent = "Có thay đổi chưa lưu"; }
 });
 
 document.addEventListener("change", (event) => {
@@ -570,11 +774,22 @@ document.addEventListener("change", (event) => {
   if (target.dataset.action === "toggle-variance") { state.ui.stocktakeVarianceOnly = target.checked; render(true); }
   if (target.hasAttribute("data-report-period")) { state.ui.reportPeriod = target.value; render(true); }
   if (target.closest("#action-form") && activeDialog) { activeDialog.dirty = true; if (activeDialog.input) activeDialog.input(); }
-  if (target.closest("#settings-form")) { state.ui.settingsDirty = true; const note = document.getElementById("settings-save-note"); if (note) note.textContent = "Có thay đổi chưa lưu"; }
+  if (target.closest("#settings-form") && !target.dataset.syncField) { state.ui.settingsDirty = true; const note = document.getElementById("settings-save-note"); if (note) note.textContent = "Có thay đổi chưa lưu"; }
 });
 
 document.addEventListener("submit", async (event) => {
   const form = event.target;
+  if (form.id === "inventory-report-filters") {
+    event.preventDefault();
+    if (!canViewInventoryReport()) return;
+    const data = new FormData(form);
+    const from = String(data.get("from") || ""), to = String(data.get("to") || ""), category = String(data.get("category") || "");
+    if ((from && !validReportDay(from)) || (to && !validReportDay(to)) || (from && to && from > to)) return toast("Kiểm tra khoảng ngày. Ngày bắt đầu không được sau ngày kết thúc.", "warning");
+    state.ui.inventoryReportFilter = { from, to, category };
+    render(true);
+    document.querySelector('#inventory-report-filters [type="submit"]')?.focus();
+    return;
+  }
   if (form.id === "settings-form") { event.preventDefault(); if (validateForm(form)) saveSettings(form); return; }
   if (form.id === "action-form" && activeDialog?.submit) {
     event.preventDefault();
@@ -660,7 +875,9 @@ window.addEventListener("storage", (event) => {
 });
 window.addEventListener("resize", closePopover);
 loadWorkspace();
-ensureSeedCredentials().then(() => {
+initServerSync();
+ensureSeedCredentials().then(async () => {
+  if (serverSync.enabled && serverSync.token) await serverSyncResumeSession();
   if (workspaceStatus.error || workspaceStatus.conflict) return;
   try { installLinkedSampleData({ automatic: true }); }
   catch (error) { toast(error.message, "warning"); }

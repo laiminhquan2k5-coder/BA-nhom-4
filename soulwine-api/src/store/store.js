@@ -75,6 +75,9 @@ export class Store {
         CREATE TABLE IF NOT EXISTS workspace_state (
           singleton INTEGER PRIMARY KEY CHECK (singleton=1), revision INTEGER NOT NULL, payload TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS shared_workspace (
+          singleton INTEGER PRIMARY KEY CHECK (singleton=1), revision INTEGER NOT NULL, saved_at TEXT NOT NULL, payload TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS audit_events (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, revision INTEGER NOT NULL, at TEXT NOT NULL,
           request_id TEXT, actor_id TEXT, action TEXT NOT NULL, entity TEXT NOT NULL, entity_key TEXT,

@@ -6,19 +6,19 @@ import path from "node:path";
 import { once } from "node:events";
 import { createApp } from "../server.js";
 import { config } from "../src/config.js";
+import { hashOtp } from "../src/auth/passwords.js";
 
 const tempRoot = "C:\\Users\\quan\\AppData\\Local\\Temp\\kilo";
 const digest = (token) => crypto.createHash("sha256").update(token).digest("hex");
 const past = "2020-01-01T12:00:00Z";
 
-async function fixture(t) {
+async function fixture(t, deliver = async () => {}) {
   assert.ok(fs.existsSync(tempRoot), "Preapproved temporary directory must exist");
   const dataDir = fs.mkdtempSync(path.join(tempRoot, "soulwine-security-"));
-  const { server, store } = createApp(dataDir);
-  const originalOutbox = config.allowDevOutbox;
-  config.allowDevOutbox = false;
+  const sent = [];
+  const recoveryMailer = deliver && (async (message) => { await deliver(message); sent.push(message); });
+  const { server, store } = createApp(dataDir, { logging: false, recoveryMailer });
   t.after(async () => {
-    config.allowDevOutbox = originalOutbox;
     if (server.listening) {
       const closed = once(server, "close");
       server.close();
@@ -61,7 +61,10 @@ async function fixture(t) {
     return result.token;
   };
   const seed = (fn) => store.transact({ action: "test.fixture" }, fn);
-  return { store, api, login, full, seed };
+  const allowResend = (email) => seed((tx) => {
+    for (const entry of tx.list("outbox")) if (entry.email === email) entry.createdAt = past;
+  });
+  return { store, api, login, full, seed, sent, allowResend };
 }
 
 test("bearer tokens are hashed at rest and raw tokens survive role/password responses", async (t) => {
@@ -101,24 +104,85 @@ test("role removal and disabling users revoke sessions; request resolution reche
   assert.equal((await f.api("POST", "/api/auth/session", fresh.token, { role: "warehouse_staff" })).status, 401);
 });
 
-test("development outbox requires explicit enablement and a full director session", async (t) => {
-  const f = await fixture(t);
-  const restrictedDirector = await f.login("director");
-  config.allowDevOutbox = true;
-  assert.equal((await f.api("GET", "/api/auth/outbox", restrictedDirector.token)).status, 403);
-  config.allowDevOutbox = false;
-  const director = await f.full("director");
+test("unconfigured recovery is unavailable, and there is no plaintext outbox route", async (t) => {
+  const f = await fixture(t, null);
   const email = config.seedAccounts[0].email;
-  assert.equal((await f.api("POST", "/api/auth/forgot", null, { email })).status, 200);
-  assert.equal((await f.api("GET", "/api/auth/outbox", director)).status, 403);
-  config.allowDevOutbox = true;
-  const restricted = await f.login("sales_staff");
-  assert.equal((await f.api("GET", "/api/auth/outbox", restricted.token)).status, 403);
-  const sales = await f.full("sales_staff");
-  assert.equal((await f.api("GET", "/api/auth/outbox", sales)).status, 403);
-  const entries = await f.api("GET", "/api/auth/outbox", director);
-  assert.equal(entries.status, 200);
-  assert.match(entries.data[0].code, /^\d{6}$/);
+  for (const route of ["forgot", "reset-password"]) {
+    const response = await f.api("POST", `/api/auth/${route}`, null, { email, code: "123456", newPassword: "NextPassword123" });
+    assert.equal(response.status, 503);
+    assert.equal(response.data.code, "recovery_unavailable");
+  }
+  assert.equal(f.store.list("outbox").length, 0);
+  assert.equal((await f.api("GET", "/api/auth/outbox", await f.full("director"))).status, 404);
+});
+
+test("email recovery is non-enumerating in its response and never returns or stores a plaintext OTP", async (t) => {
+  const f = await fixture(t);
+  const email = "enabled@example.test";
+  f.seed((tx) => {
+    tx.find("credentials", "U-001").email = email;
+    tx.find("users", "U-002").status = "user_locked";
+    tx.find("credentials", "U-003").pending = true;
+  });
+  const forgot = (value) => f.api("POST", "/api/auth/forgot", null, { email: value });
+  const response = await forgot(` ${email.toUpperCase()} `);
+  assert.equal(response.status, 200);
+  assert.deepEqual(Object.keys(response.data).sort(), ["expiresMinutes", "message", "retryAfterSeconds"]);
+  for (const value of ["unknown@example.test", config.seedAccounts[1].email, config.seedAccounts[2].email, email]) {
+    assert.deepEqual(await forgot(value), response);
+  }
+  assert.equal((await forgot("other@example.test,enabled@example.test")).status, 400);
+  assert.equal(f.sent.length, 1);
+  const [message] = f.sent;
+  assert.equal(message.to, email);
+  assert.match(message.code, /^\d{6}$/);
+  const [entry] = f.store.list("outbox");
+  assert.ok(entry.sentAt);
+  assert.equal(entry.hash, hashOtp(message.code, entry.salt));
+  assert.ok(!Object.hasOwn(entry, "code"));
+  const auditEntry = f.store.journal.find((event) => event.entity === "outbox" && event.kind === "create");
+  for (const key of ["salt", "hash", "code"]) assert.ok(!Object.hasOwn(auditEntry.after, key));
+});
+
+test("pending and failed email delivery cannot activate an OTP, and errors stay internal", async (t) => {
+  const { promise: started, resolve: start } = Promise.withResolvers();
+  const { promise: finish, reject: fail } = Promise.withResolvers();
+  const f = await fixture(t, async (message) => { start(message); await finish; });
+  const email = config.seedAccounts[0].email;
+  const request = f.api("POST", "/api/auth/forgot", null, { email });
+  const { code } = await started;
+  const reset = () => f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: "NextPassword123" });
+  try {
+    assert.equal((await reset()).data.code, "otp_missing");
+  } finally {
+    fail(new Error(`private transport error ${code}`));
+  }
+  const response = await request;
+  assert.deepEqual(response, await f.api("POST", "/api/auth/forgot", null, { email: "unknown@example.test" }));
+  assert.equal((await reset()).data.code, "otp_missing");
+  assert.equal(f.store.list("outbox")[0].sentAt, null);
+  assert.ok(f.store.list("outbox")[0].consumedAt);
+  assert.ok(f.store.journal.some((event) => event.action === "auth.recovery_delivery_failed"));
+  assert.doesNotMatch(JSON.stringify(f.store.journal), /private transport error/);
+});
+
+test("legacy local outbox codes cannot reset API passwords", async (t) => {
+  const f = await fixture(t);
+  const { email } = config.seedAccounts[0];
+  const code = "123456";
+  f.seed((tx) => tx.list("outbox").push({ id: "legacy", email, code, salt: "fixture", hash: hashOtp(code, "fixture"), purpose: "password-reset", expiresAt: "2099-01-01T00:00:00Z", attempts: 0 }));
+  const response = await f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: "NextPassword123" });
+  assert.equal(response.data.code, "otp_missing");
+});
+
+test("an expired email OTP cannot reset the password", async (t) => {
+  const f = await fixture(t);
+  const { email } = config.seedAccounts[0];
+  await f.api("POST", "/api/auth/forgot", null, { email });
+  f.seed((tx) => { tx.list("outbox")[0].expiresAt = past; });
+  const { code } = f.sent[0];
+  const response = await f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: "NextPassword123" });
+  assert.equal(response.data.code, "otp_expired");
 });
 
 test("new OTP issuance invalidates earlier codes and reset consumes all challenges", async (t) => {
@@ -126,18 +190,22 @@ test("new OTP issuance invalidates earlier codes and reset consumes all challeng
   const email = config.seedAccounts[0].email;
   await f.api("POST", "/api/auth/forgot", null, { email });
   const firstId = f.store.list("outbox").at(-1).id;
+  f.allowResend(email);
   await f.api("POST", "/api/auth/forgot", null, { email });
   assert.ok(f.store.find("outbox", firstId).consumedAt);
-  assert.equal(f.store.find("outbox", firstId).code, null);
+  assert.equal(f.sent.length, 2);
   const latest = structuredClone(f.store.list("outbox").at(-1));
-  const rejected = await f.api("POST", "/api/auth/reset-password", null, { email, code: latest.code, newPassword: config.initialPasswords["U-001"] });
+  const { code } = f.sent.at(-1);
+  const rejected = await f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: config.initialPasswords["U-001"] });
   assert.equal(rejected.data.code, "same_password");
   assert.equal(f.store.find("outbox", latest.id).attempts, 0);
   assert.equal(f.store.find("outbox", latest.id).consumedAt, null);
-  const reset = await f.api("POST", "/api/auth/reset-password", null, { email, code: latest.code, newPassword: "ResetPassword123" });
+  const session = await f.login("director");
+  const reset = await f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: "ResetPassword123" });
   assert.equal(reset.status, 200, JSON.stringify(reset.data));
-  assert.ok(f.store.list("outbox").every((entry) => entry.consumedAt && entry.code === null));
-  assert.equal((await f.api("POST", "/api/auth/reset-password", null, { email, code: latest.code, newPassword: "ReplayPassword123" })).data.code, "otp_missing");
+  assert.ok(f.store.list("outbox").every((entry) => entry.consumedAt && !Object.hasOwn(entry, "code")));
+  assert.ok(f.store.find("sessions", digest(session.token)).revokedAt);
+  assert.equal((await f.api("POST", "/api/auth/reset-password", null, { email, code, newPassword: "ReplayPassword123" })).data.code, "otp_missing");
 });
 
 test("password changes and administrative reissue invalidate reset challenges, including old email", async (t) => {
@@ -147,12 +215,14 @@ test("password changes and administrative reissue invalidate reset challenges, i
   await f.api("POST", "/api/auth/forgot", null, { email });
   await f.full("sales_staff");
   assert.ok(f.store.list("outbox").filter((entry) => entry.email === email).every((entry) => entry.consumedAt));
+  f.allowResend(email);
   await f.api("POST", "/api/auth/forgot", null, { email });
+  assert.equal(f.sent.length, 2);
   const reissued = await f.api("POST", "/api/users/U-004/password", director, { password: "ReissuedPassword123", email: "replacement@example.com", mustChange: true });
   assert.equal(reissued.status, 200);
   assert.equal(f.store.find("users", "U-004").email, "replacement@example.com");
   assert.equal(f.store.find("credentials", "U-004").email, "replacement@example.com");
-  assert.ok(f.store.list("outbox").filter((entry) => entry.email === email).every((entry) => entry.consumedAt && entry.code === null));
+  assert.ok(f.store.list("outbox").filter((entry) => entry.email === email).every((entry) => entry.consumedAt && !Object.hasOwn(entry, "code")));
 });
 
 test("failed password and OTP counters persist and lock on the configured attempt", async (t) => {

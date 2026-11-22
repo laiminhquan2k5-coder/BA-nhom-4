@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { config, ROLES } from "../config.js";
 import { ApiError, badRequest, conflict, forbidden, tooMany, unauthorized } from "../http/http.js";
-import { hashOtp, hashPassword, hashToken, newOtpCode, newToken, passwordPolicyError, verifyPassword } from "./passwords.js";
+import { hashOtp, hashPassword, hashToken, newOtpCode, newToken, passwordPolicyError, verifyOtp, verifyPassword } from "./passwords.js";
+import { isRecoveryMailbox } from "./recovery-mail.js";
 
 export function credentialByEmail(store, email) {
   const normalized = String(email || "").trim().toLowerCase();
@@ -37,7 +38,7 @@ function invalidateOtps(tx, email) {
   for (const entry of tx.list("outbox")) {
     if (entry.email === email && entry.purpose === "password-reset") {
       entry.consumedAt ||= new Date().toISOString();
-      entry.code = null;
+      if (Object.hasOwn(entry, "code")) entry.code = null;
     }
   }
 }
@@ -174,62 +175,73 @@ export function changePassword(store, ctx, body) {
   return { token: responseToken(ctx), scope: "full", user: publicUser(store, session.userId) };
 }
 
-export function forgotPassword(store, ctx, body) {
-  const email = String(body.email || "").trim().toLowerCase();
-  if (!email) badRequest("invalid_input", "Nhập email đăng ký.");
-  const actorOf = () => {
-    const user = touchActor(store, email);
-    return { id: user?.id || null, name: user?.name || email, role: null, authenticated: false };
+function requireRecoveryMailer(recoveryMailer) {
+  if (!recoveryMailer) throw new ApiError(503, "recovery_unavailable", "Khôi phục qua email chưa được cấu hình. Liên hệ người quản trị.");
+}
+
+export async function forgotPassword(store, ctx, body, recoveryMailer) {
+  requireRecoveryMailer(recoveryMailer);
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  if (!isRecoveryMailbox(email)) badRequest("invalid_input", "Nhập địa chỉ email hợp lệ.");
+  const meta = { requestId: ctx.requestId, method: ctx.method, route: "auth/forgot", ip: ctx.ip, userAgent: ctx.userAgent };
+  const response = {
+    expiresMinutes: config.auth.otpMinutes,
+    retryAfterSeconds: config.auth.otpResendSeconds,
+    message: "Nếu tài khoản đủ điều kiện và thư được gửi thành công, bạn sẽ nhận được mã đặt lại mật khẩu."
   };
-  let outboxId = null;
-  store.transact({ actor: actorOf(), action: "auth.forgot_password", requestId: ctx.requestId, method: ctx.method, route: "auth/forgot", ip: ctx.ip, userAgent: ctx.userAgent }, (tx) => {
-    const credential = tx.list("credentials").find((item) => item.email === email);
-    if (!credential) {
-      tx.note(`Yêu cầu khôi phục mật khẩu với email chưa đăng ký: ${email}.`);
-      throw new ApiError(404, "unknown_email", "Email chưa được đăng ký trong hệ thống.");
+  const code = newOtpCode();
+  const { result: challenge } = store.transact({ ...meta, action: "auth.forgot_password" }, (tx) => {
+    const credential = credentialByEmail(tx, email);
+    const user = credential && tx.find("users", credential.userId);
+    if (!credential || credential.pending || user?.status !== "user_active") {
+      tx.note("Không phát hành mã khôi phục cho yêu cầu này.");
+      return;
     }
-    const user = tx.find("users", credential.userId);
-    if (!user || user.status !== "user_active") forbidden("inactive_user", "Hồ sơ không còn hiệu lực.");
+    const now = Date.now();
+    const entries = tx.list("outbox");
+    if (entries.some((entry) => entry.channel === "smtp" && entry.email === email && entry.purpose === "password-reset" && now - Date.parse(entry.createdAt) < config.auth.otpResendSeconds * 1000)) {
+      tx.note("Yêu cầu mã khôi phục trong thời gian chờ gửi lại.");
+      return;
+    }
     invalidateOtps(tx, email);
     const salt = crypto.randomBytes(16).toString("hex");
-    const code = newOtpCode();
-    const entry = {
-      id: `OB-${crypto.randomBytes(6).toString("hex")}`,
-      email,
-      code,
-      salt,
-      hash: hashOtp(code, salt),
-      purpose: "password-reset",
-      expiresAt: new Date(Date.now() + config.auth.otpMinutes * 60000).toISOString(),
-      attempts: 0,
-      consumedAt: null,
-      createdAt: new Date().toISOString()
-    };
-    tx.list("outbox").push(entry);
-    outboxId = entry.id;
-    tx.note(`Đã tạo mã OTP khôi phục mật khẩu cho ${email} (hiệu lực ${config.auth.otpMinutes} phút).`);
+    const id = `OB-${crypto.randomUUID()}`;
+    entries.push({
+      id, email, userId: credential.userId, salt, hash: hashOtp(code, salt), purpose: "password-reset", channel: "smtp",
+      createdAt: new Date(now).toISOString(), sentAt: null, expiresAt: null, consumedAt: null, attempts: 0
+    });
+    return id;
   });
-  return { outboxId, expiresMinutes: config.auth.otpMinutes, message: `Mã xác nhận đã được tạo và đưa vào hộp thư trên thiết bị cho ${email}.` };
+  if (!challenge) return response;
+
+  // Keep SMTP outside the SQLite transaction. Pending challenges cannot be redeemed.
+  let accepted = false;
+  try {
+    await recoveryMailer({ to: email, code, expiresMinutes: config.auth.otpMinutes });
+    accepted = true;
+  } catch {
+    // Do not log transport errors, which can contain credentials or message details.
+  }
+  store.transact({ ...meta, action: accepted ? "auth.recovery_sent" : "auth.recovery_delivery_failed", status: accepted ? 200 : 502 }, (tx) => {
+    const entry = tx.find("outbox", challenge);
+    if (entry && !entry.consumedAt) {
+      const now = Date.now();
+      if (accepted) {
+        entry.sentAt = new Date(now).toISOString();
+        entry.expiresAt = new Date(now + config.auth.otpMinutes * 60000).toISOString();
+      } else {
+        entry.consumedAt = new Date(now).toISOString();
+      }
+    }
+    tx.note(accepted ? "Máy chủ SMTP đã nhận thư khôi phục." : "Không thể gửi thư khôi phục qua SMTP.");
+  });
+  return response;
 }
 
-export function readOutbox(store, ctx, query) {
-  requireFullSession(ctx);
-  if (ctx.session.role !== "director" || config.allowDevOutbox !== true) forbidden("outbox_disabled", "Hộp thư phát triển không khả dụng.");
-  let entries = store.list("outbox").filter((entry) => entry.purpose === "password-reset");
-  if (query.email) entries = entries.filter((entry) => entry.email === query.email.toLowerCase());
-  return entries.slice(-10).reverse().map((entry) => ({
-    id: entry.id,
-    email: entry.email,
-    code: entry.consumedAt || !(Date.parse(entry.expiresAt) > Date.now()) ? null : entry.code,
-    expiresAt: entry.expiresAt,
-    consumedAt: entry.consumedAt,
-    createdAt: entry.createdAt,
-    note: "Hộp thư cục bộ: bản chạy trực tiếp chưa kết nối dịch vụ email. Khi triển khai máy chủ thư, mã này được gửi tới email đăng ký."
-  }));
-}
-
-export function resetPassword(store, ctx, body) {
-  const email = String(body.email || "").trim().toLowerCase();
+export function resetPassword(store, ctx, body, recoveryMailer) {
+  requireRecoveryMailer(recoveryMailer);
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  if (!isRecoveryMailbox(email)) badRequest("invalid_input", "Nhập địa chỉ email hợp lệ.");
   const code = String(body.code || "").trim();
   const next = String(body.newPassword || "");
   const policy = passwordPolicyError(next);
@@ -239,15 +251,17 @@ export function resetPassword(store, ctx, body) {
     return { id: user?.id || null, name: user?.name || email, role: null, authenticated: false };
   };
   store.transact({ actor: actorOf(), action: "auth.reset_password", commitOnErrorCodes: ["otp_invalid", "otp_locked"], requestId: ctx.requestId, method: ctx.method, route: "auth/reset-password", ip: ctx.ip, userAgent: ctx.userAgent }, (tx) => {
-    const entry = [...tx.list("outbox")].reverse().find((item) => item.email === email && item.purpose === "password-reset" && !item.consumedAt);
+    const credential = credentialByEmail(tx, email);
+    const entry = credential && [...tx.list("outbox")].reverse().find((item) => item.email === email && item.userId === credential.userId && item.purpose === "password-reset" && item.channel === "smtp" && item.sentAt && !item.consumedAt);
     if (!entry) { tx.note(`Đặt lại mật khẩu thất bại: không có mã hợp lệ cho ${email}.`); throw new ApiError(400, "otp_missing", "Chưa có mã xác nhận hợp lệ. Gửi lại yêu cầu quên mật khẩu."); }
+    if (credential.pending || tx.find("users", credential.userId)?.status !== "user_active") forbidden("inactive_user", "Hồ sơ không còn hiệu lực.");
     if (!(Date.parse(entry.expiresAt) > Date.now())) { tx.note(`Đặt lại mật khẩu thất bại: mã OTP của ${email} hết hạn.`); throw new ApiError(400, "otp_expired", `Mã đã hết hạn sau ${config.auth.otpMinutes} phút.`); }
     if (entry.attempts >= config.auth.maxOtpAttempts) {
       invalidateOtps(tx, email);
       conflict("otp_locked", "Mã đã bị khóa. Bắt đầu lại với mã mới.");
     }
     entry.attempts += 1;
-    if (!/^\d{6}$/.test(code) || hashOtp(code, entry.salt) !== entry.hash) {
+    if (!/^\d{6}$/.test(code) || !verifyOtp(code, entry.salt, entry.hash)) {
       if (entry.attempts >= config.auth.maxOtpAttempts) {
         invalidateOtps(tx, email);
         conflict("otp_locked", `Nhập sai ${config.auth.maxOtpAttempts} lần. Bắt đầu lại với mã mới.`);
@@ -255,9 +269,6 @@ export function resetPassword(store, ctx, body) {
       tx.note(`Đặt lại mật khẩu thất bại: mã OTP chưa đúng cho ${email}.`);
       throw new ApiError(400, "otp_invalid", `Mã chưa đúng. Còn ${config.auth.maxOtpAttempts - entry.attempts} lần nhập.`);
     }
-    const credential = tx.list("credentials").find((item) => item.email === email);
-    if (!credential) throw new ApiError(404, "unknown_email", "Tài khoản không còn tồn tại.");
-    if (tx.find("users", credential.userId)?.status !== "user_active") forbidden("inactive_user", "Hồ sơ không còn hiệu lực.");
     if (verifyPassword(next, credential.salt, credential.hash)) badRequest("same_password", "Mật khẩu mới phải khác mật khẩu cũ.");
     const { salt, hash } = hashPassword(next);
     credential.salt = salt;

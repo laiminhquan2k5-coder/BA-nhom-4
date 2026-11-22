@@ -285,7 +285,7 @@ function viewApprovals() {
   return `${pageHead({
     title: "Trung tâm phê duyệt",
     subtitle: "Tập trung hồ sơ cần xác nhận, thời gian chờ và kết quả xử lý của từng bên.",
-    actions: `<button class="btn btn-secondary" data-action="export-approvals">${icon("download")} Xuất lịch sử</button>`
+    actions: canExportApprovalHistory() ? reportExportActions("export-approvals", list.length > 0) : ""
   })}
   <div class="banner info mb-16">${icon("shield")}<div>Đối chiếu giá trị, chứng từ và người xử lý trước khi quyết định. Từ chối cần nêu rõ lý do; mọi quyết định được ghi nhật ký.</div></div>
   <div class="card">
@@ -316,13 +316,20 @@ function receiptOverThreshold(receipt) {
 }
 function receiptDefectRate(line) { return line.ordered > 0 ? (line.damaged || 0) / line.ordered * 100 : 0; }
 
-function receiptThreshold(receipt) { return receipt.status === "receiving" ? state.settings.rules.receiptTolerance : receipt.threshold ?? state.settings.rules.receiptTolerance; }
+function receiptThreshold(receipt) { return receipt.source ? null : receipt.status === "receiving" ? state.settings.rules.receiptTolerance : receipt.threshold ?? state.settings.rules.receiptTolerance; }
 function receiptCountsComplete(receipt) { return receipt.lines.every((line) => line.counted && [line.received, line.good, line.damaged].every((value) => Number.isSafeInteger(value) && value >= 0)); }
+function purchaseCostReceipt(order) {
+  const receipt = order.status === "completed" && receiptByCode(order.receipt);
+  return receipt && receipt.po === order.code && !receipt.source && receipt.status === "completed" && receipt.lines.some((line) => line.received !== line.ordered || line.damaged > 0) ? receipt : null;
+}
 function receiptAssessment(receipt) {
+  if (receipt.po && receipt.status === "returned") return '<div class="banner danger">Đã trả lô, không ghi tăng tồn. Giữ nguyên kết quả và chứng từ này để đối chiếu lần giao lại.</div>';
+  if (receipt.po && receipt.status === "completed") return '<div class="banner success">Đã xác nhận nhập kho theo kết quả kiểm đếm trên phiếu.</div>';
   if (!receiptCountsComplete(receipt)) return '<div class="banner info">Nhập đủ số lượng thực nhận, hàng đạt và hư hỏng của từng dòng để đối chiếu.</div>';
   if (receipt.lines.some((line) => line.good + line.damaged !== line.received)) return '<div class="banner danger">Tổng hàng đạt + hư hỏng phải bằng số thực nhận ở từng dòng.</div>';
-  if (receiptThreshold(receipt) === null) return '<div class="banner warning">Chưa thiết lập ngưỡng sai lệch tiếp nhận.<a class="banner-link" href="#/settings">Mở cấu hình</a></div>';
+  if (!receipt.source && receiptThreshold(receipt) === null) return '<div class="banner warning">Chưa thiết lập ngưỡng sai lệch tiếp nhận.<a class="banner-link" href="#/settings">Mở cấu hình</a></div>';
   if (!receipt.evidence.length) return '<div class="banner warning">Đính kèm phiếu giao hoặc biên bản kiểm đếm trước khi xác nhận kết quả.</div>';
+  if (receipt.source) return `<div class="banner info"><strong>Kết quả đối chiếu chứng từ:</strong> ${escapeHtml(receipt.note)}</div>`;
   return receiptOverThreshold(receipt) ? '<div class="banner danger">Có dòng vượt ngưỡng sai lệch. Trả lô, yêu cầu giao lại; không xác nhận hàng đạt vào kho.</div>' : '<div class="banner success">Kết quả trong ngưỡng tiếp nhận. Quản lý kho kiểm tra chứng từ trước khi ghi nhập.</div>';
 }
 
@@ -331,7 +338,7 @@ function viewReceipts() {
     href: hrefFor("receipts", receipt.code),
     cells: [
       `<span class="row-link">${escapeHtml(receipt.code)}</span><div class="cell-sub">${escapeHtml(receipt.eta)}</div>`,
-      `<span>${escapeHtml(receipt.po)}</span>`,
+      `<span>${escapeHtml(receipt.po || receipt.source)}</span>`,
       `<span>${escapeHtml(supplierName(receipt.supplier))}</span>`,
       `<span class="num">${receipt.lines.length}</span>`,
       statusChip(receipt.status),
@@ -342,13 +349,13 @@ function viewReceipts() {
   return `${pageHead({
     title: "Tiếp nhận hàng",
     subtitle: "Kiểm đếm, đối chiếu với đơn đặt hàng và xử lý sai lệch trước khi ghi nhập kho.",
-    actions: `<button class="btn btn-secondary" data-action="export-receipts">${icon("download")} Xuất danh sách</button><button class="btn btn-primary" data-action="create-receipt">${icon("plus")} Tạo phiếu tiếp nhận</button>`
+    actions: `<button class="btn btn-secondary" data-action="export-receipts">${icon("download")} Xuất danh sách</button><button class="btn btn-secondary" data-action="create-basic-receipt">${icon("plus")} Nhập từ chứng từ nguồn</button><button class="btn btn-primary" data-action="create-receipt">${icon("plus")} Tạo phiếu tiếp nhận</button>`
   })}
-  ${state.settings.rules.receiptTolerance === null ? '<div class="banner warning mb-16">Thiết lập ngưỡng sai lệch tiếp nhận trước khi xác nhận nhập kho.<a class="banner-link" href="#/settings">Mở cấu hình</a></div>' : `<div class="banner info mb-16">Ngưỡng sai lệch hiện hành: ${state.settings.rules.receiptTolerance}%. Lô vượt ngưỡng phải được trả lại và yêu cầu giao lại.</div>`}
+   ${state.settings.rules.receiptTolerance === null ? '<div class="banner warning mb-16">Nhập theo đơn đặt hàng cần thiết lập ngưỡng sai lệch. Nhập từ chứng từ nguồn không cần cấu hình này.<a class="banner-link" href="#/settings">Mở cấu hình</a></div>' : `<div class="banner info mb-16">Ngưỡng sai lệch khi nhập theo đơn đặt hàng: ${state.settings.rules.receiptTolerance}%. Lô vượt ngưỡng phải được trả lại và yêu cầu giao lại.</div>`}
   <div class="card">
     ${dataTable([
       { label: "Phiếu tiếp nhận" },
-      { label: "Đơn đặt hàng" },
+      { label: "Đơn đặt hàng / chứng từ nguồn" },
       { label: "Nhà cung cấp" },
       { label: "Số dòng", align: "num" },
       { label: "Trạng thái" },
@@ -364,13 +371,16 @@ function viewReceiptDetail(code) {
   if (!receipt) {
     return pageHead({ title: "Không tìm thấy phiếu tiếp nhận" }) + card({ body: emptyState("truck", "Phiếu không tồn tại", "Liên kết có thể đã cũ hoặc phiếu đã bị xóa.", `<a class="btn btn-secondary" href="#/receipts">Quay lại</a>`) });
   }
-  const lock = stockLock();
+  const lock = receipt.status === "receiving" && stockLock(receipt.lines.map((line) => line.sku));
   const over = receiptOverThreshold(receipt);
   const totalOrdered = receipt.lines.reduce((sum, line) => sum + line.ordered, 0);
   const totalReceived = receipt.lines.reduce((sum, line) => sum + line.received, 0);
   const totalGood = receipt.lines.reduce((sum, line) => sum + line.good, 0);
   const totalDamaged = receipt.lines.reduce((sum, line) => sum + line.damaged, 0);
   const editable = receipt.status === "receiving";
+  const order = receipt.po && state.purchaseOrders.find((item) => item.code === receipt.po);
+  const nextAttempt = order && state.receipts.find((item) => item.po === order.code && item.previousReceipt === receipt.code);
+  const costReceipt = order && purchaseCostReceipt(order) === receipt;
   const rows = receipt.lines.map((line) => {
     const variance = receiptVariance(line);
     const within = receiptThreshold(receipt) !== null && Math.abs(variance) <= receiptThreshold(receipt) && receiptDefectRate(line) <= receiptThreshold(receipt);
@@ -390,25 +400,29 @@ function viewReceiptDetail(code) {
     breadcrumb: `<a href="#/receipts">Tiếp nhận hàng</a> ${icon("chevron-right")} <span>${escapeHtml(receipt.code)}</span>`,
     title: receipt.code,
     status: statusChip(receipt.status),
-    subtitle: `${receipt.po} · ${supplierName(receipt.supplier)} · ETA ${receipt.eta}`,
+    subtitle: receipt.source ? `Chứng từ nguồn ${receipt.source} · ${receipt.eta}` : `${receipt.po} · ${supplierName(receipt.supplier)} · ETA ${receipt.eta}`,
     actions: `<a class="btn btn-ghost" href="#/receipts">${icon("arrow-left")} Quay lại</a>
       <button class="btn btn-secondary" data-action="print-receipt" data-code="${escapeHtml(receipt.code)}">${icon("printer")} In phiếu</button>
       ${editable ? `<button class="btn btn-secondary" data-action="save-receipt" data-code="${escapeHtml(receipt.code)}">${icon("check")} Lưu kiểm đếm</button>` : ""}
-      ${editable ? `<button class="btn btn-danger ${over ? "" : "hidden"}" data-action="return-receipt" data-code="${escapeHtml(receipt.code)}">${icon("x")} Trả lô &amp; giao lại</button><button class="btn btn-primary ${over ? "hidden" : ""}" data-action="confirm-receipt" data-code="${escapeHtml(receipt.code)}" ${lock || !receiptCountsComplete(receipt) || receiptThreshold(receipt) === null ? "disabled" : ""}>${icon("package")} Xác nhận nhập kho</button>` : ""}`
+      ${editable ? `<button class="btn btn-danger ${over ? "" : "hidden"}" data-action="return-receipt" data-code="${escapeHtml(receipt.code)}">${icon("x")} Trả lô &amp; giao lại</button><button class="btn btn-primary ${over ? "hidden" : ""}" data-action="confirm-receipt" data-code="${escapeHtml(receipt.code)}" ${lock || !receiptCountsComplete(receipt) || (!receipt.source && receiptThreshold(receipt) === null) ? "disabled" : ""}>${icon("package")} Xác nhận nhập kho</button>` : ""}
+      ${order && canStartPoReceipt(order, receipt) && ACTION_ROLES["redeliver-po"].includes(state.role) ? `<button class="btn btn-primary" data-action="redeliver-po" data-code="${escapeHtml(order.code)}" data-previous="${escapeHtml(receipt.code)}">Tiếp nhận lô giao lại</button>` : ""}`
   })}
   <div class="card mb-16"><div class="card-body">
     <div class="flex items-center justify-between gap-12 flex-wrap mb-16">
       <div class="flex items-center gap-8"><span class="phase-pill">Bước 4 / 4</span><strong style="font-size:12px">Xử lý sai lệch &amp; xác nhận nhập</strong></div>
-       <span class="muted small">Ngưỡng sai lệch: ${receiptThreshold(receipt) === null ? "Chưa thiết lập" : `${receiptThreshold(receipt)}%`}</span>
+        <span class="muted small">${receipt.source ? "Đối chiếu theo chứng từ nguồn" : `Ngưỡng sai lệch: ${receiptThreshold(receipt) === null ? "Chưa thiết lập" : `${receiptThreshold(receipt)}%`}`}</span>
     </div>
     <div class="trace">
-      <div class="trace-step done"><span class="t-label">1. Tiếp nhận</span><span class="t-code">${escapeHtml(receipt.po)}</span><span class="t-status">Đã liên kết</span></div>
+       <div class="trace-step done"><span class="t-label">1. Tiếp nhận</span><span class="t-code">${escapeHtml(receipt.po || receipt.source)}</span><span class="t-status">Đã liên kết</span></div>
       <div class="trace-step done"><span class="t-label">2. Kiểm đếm</span><span class="t-code">${num(totalReceived)} đv</span><span class="t-status">${escapeHtml(receipt.owner)}</span></div>
-      <div class="trace-step done"><span class="t-label">3. Đối chiếu</span><span class="t-code">${num(totalOrdered)} đặt</span><span class="t-status">${over ? "Có sai lệch vượt ngưỡng" : "Trong ngưỡng"}</span></div>
-      <div class="trace-step current"><span class="t-label">4. Xử lý</span><span class="t-code">${receipt.status === "completed" ? "Đã nhập kho" : "Chờ xác nhận"}</span><span class="t-status">${receipt.status === "completed" ? "Hoàn tất" : "Cần quyết định"}</span></div>
+       <div class="trace-step done"><span class="t-label">3. Đối chiếu</span><span class="t-code">${num(totalOrdered)} theo chứng từ</span><span class="t-status">${receipt.source ? "Đối chiếu chứng từ nguồn" : over ? "Có sai lệch vượt ngưỡng" : "Trong ngưỡng"}</span></div>
+       <div class="trace-step current"><span class="t-label">4. Xử lý</span><span class="t-code">${receipt.status === "completed" ? "Đã nhập kho" : receipt.status === "returned" ? "Đã trả lô" : "Chờ xác nhận"}</span><span class="t-status">${receipt.status === "returned" ? "Không ghi nhập" : receipt.status === "completed" ? "Hoàn tất" : "Cần quyết định"}</span></div>
     </div>
+    ${receipt.previousReceipt ? `<p class="small mt-12">Giao lại sau phiếu <a class="link-btn" href="${hrefFor("receipts", receipt.previousReceipt)}">${escapeHtml(receipt.previousReceipt)}</a></p>` : ""}
+    ${nextAttempt ? `<p class="small mt-12">Phiếu tiếp nhận lô giao lại: <a class="link-btn" href="${hrefFor("receipts", nextAttempt.code)}">${escapeHtml(nextAttempt.code)}</a></p>` : ""}
+    ${receipt.decidedAt ? `<p class="small muted mt-12">Xác nhận bởi ${escapeHtml(receipt.decidedBy)} · ${escapeHtml(purchaseVerifiedTime(receipt.decidedAt))}</p>` : ""}
   </div></div>
-  ${lock ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Kho đang khóa kiểm kê ${escapeHtml(lock.code)}.</strong> Không thể xác nhận nhập kho cho tới khi kỳ kiểm kê hoàn tất hoặc được hủy hợp lệ.</div><a class="banner-link" href="${hrefFor("stocktakes", lock.code)}">Mở kỳ kiểm kê</a></div>` : ""}
+   ${lock ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Phiếu có SKU đang khóa theo kỳ ${escapeHtml(lock.code)}.</strong> Không thể xác nhận nhập các SKU đang kiểm kê.</div><a class="banner-link" href="${hrefFor("stocktakes", lock.code)}">Mở kỳ kiểm kê</a></div>` : ""}
   <div id="receipt-validation" class="mb-16">${receiptAssessment(receipt)}</div>
   <div class="grid grid-main">
     <div class="stack">
@@ -423,7 +437,7 @@ function viewReceiptDetail(code) {
         title: "Chứng từ & hình ảnh",
         subtitle: "Ảnh phiếu giao, tem nhập khẩu, tình trạng thùng hàng",
         iconName: "upload",
-        actions: `<button class="btn btn-secondary btn-sm" data-action="upload-evidence" data-code="${escapeHtml(receipt.code)}">${icon("upload")} Tải lên</button>`,
+         actions: editable || !receipt.po ? `<button class="btn btn-secondary btn-sm" data-action="upload-evidence" data-code="${escapeHtml(receipt.code)}">${icon("upload")} Tải lên</button>` : "",
         body: `<div class="flex flex-wrap gap-8">${receipt.evidence.map((file) => attachmentChip(file, receipt.code)).join("") || '<p class="hint">Chưa có chứng từ đính kèm.</p>'}</div><div class="hint mt-8">PDF/JPG/PNG tối đa 2 MB mỗi tệp. Tệp gốc được lưu trên trình duyệt hiện tại.</div>`
       })}
     </div>
@@ -440,15 +454,16 @@ function viewReceiptDetail(code) {
         </div>
         <div class="hint mt-12">Hàng hư hỏng không được cộng vào tồn khả dụng; theo dõi riêng để xử lý với nhà cung cấp.</div>`
       })}
-      ${card({
-        title: "Quy tắc xử lý",
+      ${costReceipt ? card({ title: "Đối chiếu chi phí mua hàng", iconName: "file", body: purchaseCostDetails(receipt) }) : ""}
+       ${!receipt.source ? card({
+         title: "Quy tắc xử lý",
         iconName: "shield",
         body: `<div class="rule-list">
-          <div class="rule-item">${icon("check-circle")}<div class="rule-main"><div class="rule-title">Trong ngưỡng</div><div class="rule-sub">Ghi nhập theo thực nhận; thông báo Kế toán điều chỉnh chi phí.</div></div></div>
+           <div class="rule-item">${icon("check-circle")}<div class="rule-main"><div class="rule-title">Trong ngưỡng</div><div class="rule-sub">Ghi nhập theo thực nhận; sai lệch đã xác nhận hiển thị cho Kế toán đối chiếu chi phí.</div></div></div>
           <div class="rule-item">${icon("alert")}<div class="rule-main"><div class="rule-title">Vượt ngưỡng</div><div class="rule-sub">Trả lô, yêu cầu giao lại, không xác nhận hàng đạt.</div></div></div>
           <div class="rule-item">${icon("lock")}<div class="rule-main"><div class="rule-title">Khóa kiểm kê</div><div class="rule-sub">Không ghi nhận nhập khi kho đang trong kỳ kiểm kê.</div></div></div>
         </div>`
-      })}
+       }) : ""}
     </div>
   </div>`;
 }
@@ -464,7 +479,12 @@ function stocktakeProgress(stocktake) {
   };
 }
 
+function stocktakeLockText(period) {
+  return isGroupStocktake(period) ? `Khóa ${period.lines.length} SKU thuộc nhóm ${period.category}.` : "Khóa giao dịch trên toàn bộ kho.";
+}
+
 function viewStocktakes() {
+  const locks = state.stocktakes.filter(isStocktakeLocked);
   const rows = state.stocktakes.map((stocktake) => {
     const progress = stocktakeProgress(stocktake);
     return {
@@ -486,7 +506,7 @@ function viewStocktakes() {
     actions: `<button class="btn btn-secondary" data-action="export-stocktakes">${icon("download")} Xuất lịch sử</button>
       <button class="btn btn-primary" data-action="new-stocktake">${icon("plus")} Tạo kỳ kiểm kê</button>`
   })}
-  ${stockLock() ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Kho đang khóa kiểm kê ${escapeHtml(stockLock().code)}.</strong> Nhập/xuất bị chặn trên toàn hệ thống cho tới khi kỳ hoàn tất.</div></div>` : ""}
+  ${locks.map((lock) => `<div class="banner locked mb-16">${icon("lock")}<div><strong>Đang kiểm kê ${escapeHtml(lock.code)}.</strong> ${escapeHtml(stocktakeLockText(lock))}</div><a class="banner-link" href="${hrefFor("stocktakes", lock.code)}">Mở kỳ kiểm kê</a></div>`).join("")}
   <div class="card">
     ${dataTable([
       { label: "Kỳ kiểm kê" },
@@ -508,6 +528,10 @@ function viewStocktakeDetail(code) {
   }
   const progress = stocktakeProgress(stocktake);
   const activeTab = state.ui.stocktakeTab;
+  const locked = isStocktakeLocked(stocktake);
+  const cancelled = stocktake.status === "cancelled";
+  const counting = locked && stocktake.status === "counting";
+  const reconciling = locked && ["reconciling", "reported"].includes(stocktake.status);
   const tabs = [
     { key: "count", label: "Đếm thực tế" },
     { key: "reconcile", label: "Đối chiếu", count: progress.variances.length },
@@ -519,9 +543,9 @@ function viewStocktakeDetail(code) {
     return `<tr>
       <td>${productCell(line.sku)}</td>
       <td class="num">${num(line.system)}</td>
-      <td><input class="input sm num-input" type="number" min="0" placeholder="Nhập SL" value="${line.count === null ? "" : line.count}" data-st-field="count" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${stocktake.status === "completed" ? "disabled" : ""}></td>
+      <td><input class="input sm num-input" type="number" min="0" placeholder="Nhập SL" value="${line.count === null ? "" : line.count}" data-st-field="count" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${counting ? "" : "disabled"}></td>
       <td class="num strong" data-st-var="${escapeHtml(line.sku)}" style="color:${variance === null ? "var(--ink-400)" : variance === 0 ? "var(--success)" : "var(--danger)"}">${variance === null ? "—" : (variance > 0 ? "+" : "") + variance}</td>
-      <td><input class="input sm" type="text" placeholder="Ghi chú" value="${escapeHtml(line.note || "")}" data-st-field="note" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${stocktake.status === "completed" ? "disabled" : ""}></td>
+      <td><input class="input sm" type="text" placeholder="Ghi chú" value="${escapeHtml(line.note || "")}" data-st-field="note" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${counting ? "" : "disabled"}></td>
     </tr>`;
   }).join("");
   const reconciliationLines = state.ui.stocktakeVarianceOnly ? progress.variances : stocktake.lines.filter((line) => line.count !== null);
@@ -533,7 +557,7 @@ function viewStocktakeDetail(code) {
       <td class="num">${num(line.count)}</td>
       <td class="num strong" style="color:${variance ? "var(--danger)" : "var(--success)"}">${variance > 0 ? "+" : ""}${num(variance)}</td>
       <td><span class="muted">${escapeHtml(line.note || (variance ? "Chưa ghi nguyên nhân" : "Khớp số liệu"))}</span>${line.reviewed ? '<div class="chip success">Đã xác nhận</div>' : ""}</td>
-      <td>${variance ? `<div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="request-recount" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${stocktake.status === "completed" ? "disabled" : ""}>${icon("refresh")} Đếm lại</button><button class="btn btn-secondary btn-sm" data-action="open-adjustment" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}" ${stocktake.status === "completed" ? "disabled" : ""}>${icon("edit")} Điều chỉnh</button></div>` : "—"}</td>
+      <td>${variance && reconciling ? `<div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="request-recount" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}">${icon("refresh")} Đếm lại</button><button class="btn btn-secondary btn-sm" data-action="open-adjustment" data-code="${escapeHtml(stocktake.code)}" data-sku="${escapeHtml(line.sku)}">${icon("edit")} Điều chỉnh</button></div>` : "—"}</td>
     </tr>`;
   }).join("");
   const content = activeTab === "reconcile"
@@ -543,10 +567,10 @@ function viewStocktakeDetail(code) {
           <span class="muted small">${progress.variances.length} mã chênh lệch</span>
         </div>
         ${progress.variances.length || !state.ui.stocktakeVarianceOnly ? `<div class="table-wrap"><table class="data" style="min-width:900px"><thead><tr><th>Sản phẩm</th><th class="num">Sổ sách</th><th class="num">Kiểm đếm</th><th class="num">Lệch</th><th>Nguyên nhân</th><th></th></tr></thead><tbody>${varianceRows || `<tr><td colspan="6">${emptyState("check-circle", "Không có chênh lệch", "Số đếm khớp với tồn sổ sách.")}</td></tr>`}</tbody></table></div>` : emptyState("check-circle", "Không có chênh lệch", "Số đếm khớp với tồn sổ sách.")}
-        <div class="flex justify-between gap-8 flex-wrap mt-16">
-          <button class="btn btn-secondary" data-action="report-stocktake" data-code="${escapeHtml(stocktake.code)}" ${stocktake.status === "completed" ? "disabled" : ""}>${icon("file-check")} Gửi báo cáo Giám đốc</button>
-          <button class="btn btn-primary" data-action="complete-stocktake" data-code="${escapeHtml(stocktake.code)}" ${stocktake.status === "completed" ? "disabled" : ""}>${icon("lock")} Hoàn tất &amp; mở khóa kho</button>
-        </div>
+        ${reconciling ? `<div class="flex justify-between gap-8 flex-wrap mt-16">
+          <button class="btn btn-secondary" data-action="report-stocktake" data-code="${escapeHtml(stocktake.code)}">${icon("file-check")} Gửi báo cáo Giám đốc</button>
+          <button class="btn btn-primary" data-action="complete-stocktake" data-code="${escapeHtml(stocktake.code)}">${icon("lock")} Hoàn tất &amp; mở khóa phạm vi</button>
+        </div>` : ""}
       </div>`
     : activeTab === "report"
       ? `<div class="card-body">
@@ -554,9 +578,9 @@ function viewStocktakeDetail(code) {
             <div class="stat-card"><div class="stat-label">Mã đã đếm</div><div class="stat-value">${progress.counted}/${progress.total}</div><div class="stat-note">${progress.percent}% danh mục</div></div>
             <div class="stat-card"><div class="stat-label">Mã chênh lệch</div><div class="stat-value">${progress.variances.length}</div><div class="stat-note">cần giải trình</div></div>
             <div class="stat-card"><div class="stat-label">Báo cáo Giám đốc</div><div class="stat-value" style="font-size:13px">${stocktake.reportTo ? escapeHtml(stocktake.reportTo) : "Chưa gửi"}</div><div class="stat-note">Biên bản kiểm kê</div></div>
-            <div class="stat-card"><div class="stat-label">Trạng thái</div><div class="stat-value" style="font-size:13px">${STATUS_META[stocktake.status].label}</div><div class="stat-note">${stocktake.locked ? "Kho đang khóa" : "Kho đã mở"}</div></div>
+            <div class="stat-card"><div class="stat-label">Trạng thái</div><div class="stat-value" style="font-size:13px">${STATUS_META[stocktake.status].label}</div><div class="stat-note">${locked ? "Đang giữ khóa của kỳ này" : "Không giữ khóa"}</div></div>
           </div>
-          <div class="banner info mb-16">${icon("file")}<div><strong>Biên bản kiểm kê ${escapeHtml(stocktake.code)}.</strong> Nêu số lượng và nguyên nhân chênh lệch; gửi Giám đốc trước khi điều chỉnh tồn và mở lại giao dịch.</div></div>
+          <div class="banner info mb-16">${icon("file")}<div><strong>Biên bản kiểm kê ${escapeHtml(stocktake.code)}.</strong> ${cancelled ? "Số liệu được lưu để tra cứu, không dùng để điều chỉnh tồn." : "Nêu số lượng và nguyên nhân chênh lệch; gửi Giám đốc trước khi điều chỉnh tồn và mở lại giao dịch."}</div></div>
           ${progress.variances.length ? `<div class="table-wrap"><table class="data" style="min-width:760px"><thead><tr><th>Sản phẩm</th><th class="num">Sổ sách</th><th class="num">Kiểm đếm</th><th class="num">Lệch</th><th>Nguyên nhân</th></tr></thead><tbody>${progress.variances.map((line) => `<tr><td>${productCell(line.sku)}</td><td class="num">${num(line.system)}</td><td class="num">${num(line.count)}</td><td class="num strong">${line.count - line.system > 0 ? "+" : ""}${num(line.count - line.system)}</td><td>${escapeHtml(line.note || "Chưa giải trình")}</td></tr>`).join("")}</tbody></table></div>` : emptyState("check-circle", "Không có chênh lệch", "Không cần điều chỉnh tồn kho.")}
           <div class="flex justify-end gap-8 mt-16"><button class="btn btn-secondary" data-action="print-stocktake" data-code="${escapeHtml(stocktake.code)}">${icon("printer")} In biên bản</button></div>
         </div>`
@@ -565,19 +589,16 @@ function viewStocktakeDetail(code) {
             <div class="timeline-item warning"><div class="timeline-title">Tạo kỳ kiểm kê và tạm khóa giao dịch</div><div class="timeline-date">${escapeHtml(stocktake.started)} · ${escapeHtml(stocktake.owner)}</div></div>
             <div class="timeline-item info"><div class="timeline-title">Bắt đầu đếm thực tế</div><div class="timeline-date">${progress.counted}/${progress.total} mã đã nhập số liệu</div></div>
             ${stocktake.status === "completed" ? `<div class="timeline-item success"><div class="timeline-title">Hoàn tất kiểm kê và mở khóa kho</div><div class="timeline-date">${escapeHtml(stocktake.reportTo || "Đã hoàn tất")}</div></div>` : ""}
-            ${state.audit.filter((entry) => entry.object === stocktake.code).map((entry) => `<div class="timeline-item ${entry.tone}"><div class="timeline-title">${escapeHtml(entry.action)}</div><div class="timeline-date">${escapeHtml(entry.time)} · ${escapeHtml(entry.actor)}</div></div>`).join("")}
+            ${state.audit.filter((entry) => entry.object === stocktake.code).map((entry) => `<div class="timeline-item ${entry.tone}"><div class="timeline-title">${escapeHtml(entry.action)}</div><div class="timeline-date">${escapeHtml(entry.time)} · ${escapeHtml(entry.actor)}</div><div class="muted small">${escapeHtml(entry.detail || "")}</div></div>`).join("")}
           </div></div>`
         : `<div class="card-body">
-            ${progress.missing ? `<div class="banner warning mb-16" id="st-missing">${icon("alert")}<div><strong>${progress.missing} mã chưa có số liệu kiểm đếm.</strong> Cần nhập đủ hoặc xác nhận số lượng bằng 0 trước khi hoàn tất đếm.</div></div>` : `<div class="banner success mb-16" id="st-missing">${icon("check-circle")}<div><strong>Đã nhập đủ số liệu cho ${progress.total} mã.</strong> Có thể chuyển sang đối chiếu.</div></div>`}
+            ${counting ? (progress.missing ? `<div class="banner warning mb-16" id="st-missing">${icon("alert")}<div><strong>${progress.missing} mã chưa có số liệu kiểm đếm.</strong> Cần nhập đủ hoặc xác nhận số lượng bằng 0 trước khi hoàn tất đếm.</div></div>` : `<div class="banner success mb-16" id="st-missing">${icon("check-circle")}<div><strong>Đã nhập đủ số liệu cho ${progress.total} mã.</strong> Có thể chuyển sang đối chiếu.</div></div>`) : ""}
             <div class="flex items-center justify-between gap-12 flex-wrap mb-12">
               <div class="progress-row" style="flex:1;max-width:360px"><span class="progress-label">Tiến độ đếm</span><span class="progress-value" id="st-progress-label">${progress.percent}%</span><div class="progress"><span id="st-progress-bar" style="width:${progress.percent}%"></span></div></div>
               <span class="muted small" id="st-counted-label">${progress.counted}/${progress.total} mã đã nhập</span>
             </div>
             <div class="table-wrap"><table class="data" style="min-width:900px"><thead><tr><th>Sản phẩm</th><th class="num">SL hệ thống</th><th class="num">SL kiểm đếm</th><th class="num">Lệch</th><th>Ghi chú</th></tr></thead><tbody>${countRows}</tbody></table></div>
-            <div class="flex justify-between gap-8 flex-wrap mt-16">
-              <span class="muted small">${stocktake.locked ? "Kho đang khóa giao dịch trong thời gian kiểm kê." : "Kỳ đã hoàn tất. Giao dịch nhập/xuất đã mở lại."}</span>
-              <button class="btn btn-primary" id="st-finish" data-action="finish-count" data-code="${escapeHtml(stocktake.code)}" ${progress.missing || stocktake.status !== "counting" ? "disabled" : ""}>${icon("check-circle")} Hoàn tất đếm thực tế</button>
-            </div>
+            ${counting ? `<div class="flex justify-end mt-16"><button class="btn btn-primary" id="st-finish" data-action="finish-count" data-code="${escapeHtml(stocktake.code)}" ${progress.missing ? "disabled" : ""}>${icon("check-circle")} Hoàn tất đếm thực tế</button></div>` : ""}
           </div>`;
   return `${pageHead({
     breadcrumb: `<a href="#/stocktakes">Kỳ kiểm kê</a> ${icon("chevron-right")} <span>${escapeHtml(stocktake.code)}</span>`,
@@ -585,13 +606,38 @@ function viewStocktakeDetail(code) {
     status: statusChip(stocktake.status),
     subtitle: `${stocktake.scope} · bắt đầu ${stocktake.started} · ${stocktake.owner}`,
     actions: `<a class="btn btn-ghost" href="#/stocktakes">${icon("arrow-left")} Quay lại</a>
-      <button class="btn btn-secondary" data-action="print-stocktake" data-code="${escapeHtml(stocktake.code)}">${icon("printer")} In biên bản</button>`
+      <button class="btn btn-secondary" data-action="print-stocktake" data-code="${escapeHtml(stocktake.code)}">${icon("printer")} In biên bản</button>
+      ${canCancelStocktake(stocktake) ? `<button class="btn btn-danger" data-action="cancel-stocktake" data-code="${escapeHtml(stocktake.code)}">Hủy kỳ</button>` : ""}`
   })}
-  ${stocktake.locked ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Kho đang khóa kiểm kê ${escapeHtml(stocktake.code)} từ ${escapeHtml(stocktake.started)}.</strong> Mọi giao dịch nhập/xuất bị chặn cho tới khi kỳ hoàn tất hoặc hủy hợp lệ.</div></div>` : `<div class="banner success mb-16">${icon("check-circle")}<div><strong>Kỳ kiểm kê đã hoàn tất.</strong> Giao dịch nhập/xuất đã được mở lại; số liệu điều chỉnh được lưu trong thẻ kho và nhật ký.</div></div>`}
+  ${locked ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Khóa kiểm kê từ ${escapeHtml(stocktake.started)}.</strong> ${escapeHtml(stocktakeLockText(stocktake))}</div></div>` : cancelled ? `<div class="banner warning mb-16">${icon("alert")}<div><strong>Kỳ đã hủy, không điều chỉnh tồn.</strong> Đã giải phóng khóa của kỳ này. Lý do: ${escapeHtml(stocktake.cancellationReason || "Không có")}</div></div>` : stocktake.status === "completed" ? `<div class="banner success mb-16">${icon("check-circle")}<div><strong>Kỳ kiểm kê đã hoàn tất.</strong> Đã giải phóng khóa của kỳ này; số liệu điều chỉnh được lưu trong thẻ kho và nhật ký.</div></div>` : ""}
   <div class="card">
     ${tabsBar("stocktake", tabs, activeTab)}
     ${content}
   </div>`;
+}
+
+function customerDetailHtml(customer) {
+  const { id } = customer;
+  const addresses = customerShippingAddresses(customer);
+  const ownsRecord = (code) => orderByCode(code)?.customerId === id || contractByCode(code)?.customerId === id;
+  const row = (code, detail, amount, status, href) => {
+    const content = `<span class="cell-main"><strong>${escapeHtml(code)}</strong><span class="cell-sub">${escapeHtml(detail)}</span></span>${status ? statusChip(status) : ""}<span class="num">${amount == null ? "—" : money(amount)}</span>`;
+    return href ? `<a class="picker-row" href="${escapeHtml(href)}">${content}</a>` : `<div class="picker-row">${content}</div>`;
+  };
+  const section = (route, title, empty, getRows, linkLabel, summary = "") => {
+    if (!routeAllowed(route)) return "";
+    const rows = getRows();
+    return `<div class="divider"></div><h3 class="section-title">${title}</h3>${summary}${rows.join("") || `<p class="muted small">${empty}</p>`}${linkLabel && rows.length ? `<p class="small mt-12"><a class="row-link" href="${hrefFor(route)}">${linkLabel}</a></p>` : ""}`;
+  };
+  return `<div class="kv-grid">${[["Liên hệ", customer.contact], ["Điện thoại", customer.phone], ["Email", customer.email], ["Mã số thuế", customer.tax]].map(([label, value]) => `<div><div class="kv-label">${label}</div><div class="kv-value">${escapeHtml(value || "—")}</div></div>`).join("")}
+    <div class="full"><div class="kv-label">Địa chỉ giao hàng</div>${addresses.map((address, index) => `<div class="kv-value">${escapeHtml(address)}${index === 0 && addresses.length > 1 ? ' <span class="muted small">(Mặc định)</span>' : ""}</div>`).join("") || '<div class="kv-value">—</div>'}</div>
+    <div class="full"><div class="kv-label">Địa chỉ xuất hóa đơn</div><div class="kv-value">${escapeHtml(customer.invoiceAddress || "—")}</div></div>
+    </div>
+    ${section("orders", "Lịch sử đơn hàng", "Chưa có đơn hàng.", () => state.orders.filter((order) => order.customerId === id).map((order) => row(order.code, order.created, order.total, order.status, hrefFor("orders", order.code))))}
+    ${section("quotes", "Lịch sử báo giá", "Chưa có báo giá.", () => state.quotes.filter((quote) => quote.customerId === id).map((quote) => row(quote.code, quote.createdAt, quoteTotals(quote).total, quoteStatus(quote), hrefFor("quotes", quote.code))))}
+    ${section("payments", "Lịch sử thanh toán", "Chưa có thanh toán.", () => state.payments.filter((payment) => payment.customerId === id || (!payment.customerId && ownsRecord(payment.record))).map((payment) => row(payment.id, [payment.record, payment.date, payment.method].filter(Boolean).join(" · "), payment.amount, payment.status)), "Mở Thanh toán & công nợ", `<p class="small">Còn phải thu: <strong>${money(customer.ar)}</strong></p>`)}
+    ${section("documents", "Lịch sử hóa đơn", "Chưa có hóa đơn.", () => state.documents.filter((document) => document.type === "Hóa đơn" && ownsRecord(document.record)).map((document) => row(document.code, [document.record, document.date].filter(Boolean).join(" · "), document.amount)), "Mở danh sách chứng từ")}
+    ${customer.note ? `<div class="divider"></div><p class="small muted">${escapeHtml(customer.note)}</p>` : ""}`;
 }
 
 function customersTableHtml(list) {
@@ -603,7 +649,7 @@ function customersTableHtml(list) {
       `<span class="mono-code">${escapeHtml(customer.tax || "—")}</span>`,
       `<span class="num">${state.orders.filter((order) => order.customerId === customer.id).length}</span>`,
       `<span class="num">${money(customer.ar)}</span>`,
-      `<div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="open-customer" data-id="${escapeHtml(customer.id)}">${icon("eye")}</button></div>`
+      `<div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="open-customer" data-id="${escapeHtml(customer.id)}" aria-label="Xem hồ sơ ${escapeHtml(customer.name)}">${icon("eye")}</button></div>`
     ]
   }));
   return dataTable([
@@ -718,58 +764,32 @@ function viewProducts() {
   </div>`;
 }
 
-function inventoryReportRows() {
-  return state.products.map((product) => {
-    const moves = state.movements.filter((move) => move.sku === product.sku);
-    const incoming = moves.filter((move) => ["Nhập kho", "Hàng hoàn"].includes(move.type)).reduce((sum, move) => sum + move.qty, 0);
-    const outgoing = moves.filter((move) => move.type === "Xuất kho").reduce((sum, move) => sum + Math.abs(move.qty), 0);
-    const adjustment = moves.filter((move) => move.type === "Điều chỉnh tồn").reduce((sum, move) => sum + move.qty, 0);
-    return { product, incoming, outgoing, adjustment, opening: product.physical - incoming + outgoing - adjustment };
-  });
-}
-
 function viewReports() {
-  const active = state.ui.reportTab;
-  const sales = salesAnalytics();
-  const inventoryRows = inventoryReportRows();
-  const inventoryTotal = (field) => num(inventoryRows.reduce((sum, row) => sum + row[field], 0));
   const tabs = [
     { key: "sales", label: "Báo cáo bán hàng" },
-    { key: "inventory", label: "Nhập - xuất - tồn" },
+    ...(canViewInventoryReport() ? [{ key: "inventory", label: "Nhập - xuất - tồn" }] : []),
     { key: "management", label: "Quản trị & KPI" }
   ];
-  const salesContent = `<div class="card-body"><div class="stat-grid mb-24">${[["Giá trị đơn hoàn tất", money(sales.total)], ["Đơn hoàn tất", sales.orders.length], ["Giá trị đơn trung bình", sales.orders.length ? money(Math.round(sales.total / sales.orders.length)) : "—"], ["Báo giá được xác nhận", state.quotes.filter((quote) => quote.confirmed).length]].map(([label, value]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("")}</div>
+  if (!tabs.some((tab) => tab.key === state.ui.reportTab)) state.ui.reportTab = "sales";
+  const active = state.ui.reportTab;
+  const sales = active === "sales" ? salesAnalytics() : null;
+  const inventory = active === "inventory" ? inventoryReport() : null;
+  const salesContent = sales ? `<div class="card-body"><div class="stat-grid mb-24">${[["Giá trị đơn hoàn tất", money(sales.total)], ["Đơn hoàn tất", sales.orders.length], ["Giá trị đơn trung bình", sales.orders.length ? money(Math.round(sales.total / sales.orders.length)) : "—"], ["Báo giá được xác nhận", state.quotes.filter((quote) => quote.confirmed).length]].map(([label, value]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("")}</div>
     <p class="hint mb-24">Tổng hợp từ đơn hàng Hoàn tất trong kỳ đã chọn. Giá trị sản phẩm được phân bổ theo tỷ trọng đơn giá; không thay thế báo cáo ghi nhận doanh thu kế toán.</p>
     <div class="grid grid-2"><div><h3 class="section-title">Xu hướng 6 tháng gần nhất · triệu đồng</h3>${sales.orders.length ? lineChart(sales.months.map((month) => month.value / 1000000), sales.months.map((month) => month.label), "reports") : emptyState("chart", "Chưa có đơn hoàn tất trong kỳ", "Chọn kỳ khác hoặc hoàn tất giao hàng để xem kết quả.")}</div><div><h3 class="section-title">Cơ cấu theo kênh</h3>${sales.channels.length ? `<div class="bar-list">${sales.channels.map(([label, value]) => `<div class="bar-row"><span class="bar-label">${escapeHtml(label)}</span><div class="bar-track"><div class="bar-fill" style="width:${value / sales.total * 100}%"></div></div><span class="bar-value">${money(value)}</span></div>`).join("")}</div>` : emptyState("chart", "Chưa có dữ liệu theo kênh", "Kết quả được tính từ kênh bán của đơn đã hoàn tất.")}</div></div>
-    <div class="grid grid-2 mt-24"><div><h3 class="section-title">Kết quả theo nhân sự</h3>${dataTable([{ label: "Phụ trách" }, { label: "Giá trị đơn hoàn tất", align: "num" }], sales.people.map(([name, value]) => ({ cells: [escapeHtml(name), money(value)] })), { minWidth: 420 })}</div><div><h3 class="section-title">Sản phẩm đóng góp</h3>${dataTable([{ label: "Sản phẩm" }, { label: "SL", align: "num" }, { label: "Giá trị phân bổ", align: "num" }], sales.products.map(([sku, item]) => ({ cells: [productCell(sku), num(item.qty), money(item.value)] })), { minWidth: 500 })}</div></div></div>`;
-  const inventoryContent = `<div class="card-body">
-    <div class="stat-strip mb-16">
-      <div><div class="label">Tồn đầu kỳ</div><div class="value">${inventoryTotal("opening")}</div></div>
-      <div><div class="label">Nhập trong kỳ</div><div class="value">${inventoryTotal("incoming")}</div></div>
-      <div><div class="label">Xuất trong kỳ</div><div class="value">${inventoryTotal("outgoing")}</div></div>
-      <div><div class="label">Tồn cuối kỳ</div><div class="value">${num(state.products.reduce((sum, product) => sum + product.physical, 0))}</div></div>
-    </div>
-    <p class="hint mb-12">Tồn đầu + nhập − xuất + điều chỉnh = tồn cuối. Đối chiếu thẻ kho và số dư hiện tại trên thiết bị.</p>
-    <div class="table-wrap"><table class="data" style="min-width:980px"><thead><tr><th>Sản phẩm</th><th class="num">Tồn đầu</th><th class="num">Nhập</th><th class="num">Xuất</th><th class="num">Điều chỉnh</th><th class="num">Tồn cuối</th><th class="num">Đang giữ</th><th class="num">Khả dụng</th><th>Định mức</th></tr></thead><tbody>
-      ${inventoryRows.map(({ product, opening, incoming, outgoing, adjustment }) => `<tr><td>${productCell(product.sku)}</td><td class="num">${num(opening)}</td><td class="num">${num(incoming)}</td><td class="num">${num(outgoing)}</td><td class="num">${num(adjustment)}</td><td class="num strong">${num(product.physical)}</td><td class="num">${num(product.held)}</td><td class="num">${num(availableOf(product))}</td><td>${availableOf(product) < product.min ? statusChip("low") : `<span class="chip success"><span class="dot"></span>Đạt</span>`}</td></tr>`).join("")}
-    </tbody></table></div>
-    <div class="grid grid-even mt-24">
-      <div>${card({ title: "Sản phẩm dưới định mức", iconName: "alert", body: state.products.some((product) => availableOf(product) < product.min) ? `<div class="rule-list">${state.products.filter((product) => availableOf(product) < product.min).map((product) => `<div class="rule-item">${productCell(product.sku)}<strong>${num(availableOf(product))} / ${num(product.min)}</strong></div>`).join("")}</div>` : emptyState("shield", "Không có SKU dưới định mức", "Cảnh báo được tính từ tồn khả dụng và định mức từng sản phẩm.") })}</div>
-      <div>${card({ title: "Hàng đang giữ theo đơn", iconName: "lock", body: state.reservations.some((reservation) => reservation.status === "holding") ? `<div class="bar-list">${state.reservations.filter((reservation) => reservation.status === "holding").map((reservation) => `<div class="bar-row"><span class="bar-label">${escapeHtml(reservation.order)} · ${escapeHtml(productName(reservation.sku))}</span><span class="bar-value">${num(reservation.qty)}</span></div>`).join("")}</div>` : emptyState("lock", "Chưa có hàng đang giữ", "Lượng giữ đã hết hiệu lực không được tính vào báo cáo.") })}</div>
-    </div>
-  </div>`;
-  const managementContent = `<div class="card-body">
+    <div class="grid grid-2 mt-24"><div><h3 class="section-title">Kết quả theo nhân sự</h3>${dataTable([{ label: "Phụ trách" }, { label: "Giá trị đơn hoàn tất", align: "num" }], sales.people.map(([name, value]) => ({ cells: [escapeHtml(name), money(value)] })), { minWidth: 420 })}</div><div><h3 class="section-title">Sản phẩm đóng góp</h3>${dataTable([{ label: "Sản phẩm" }, { label: "SL", align: "num" }, { label: "Giá trị phân bổ", align: "num" }], sales.products.map(([sku, item]) => ({ cells: [productCell(sku), num(item.qty), money(item.value)] })), { minWidth: 500 })}</div></div></div>` : "";
+  const managementContent = active === "management" ? `<div class="card-body">
     ${metricCards()}
     <div class="grid grid-2 mt-16">
       ${card({ title: "Tiến độ hợp đồng", iconName: "file-check", body: `<div class="bar-list">${state.contracts.filter((contract) => contract.status === "active").map((contract) => { const total = contract.lines.reduce((sum, line) => sum + line.qty, 0); const delivered = contract.shipments.filter((shipment) => shipment.status === "delivered").reduce((sum, shipment) => sum + shipment.items.reduce((inner, item) => inner + item.qty, 0), 0); const percent = total ? Math.round(delivered / total * 100) : 0; return `<div class="bar-row"><span class="bar-label">${escapeHtml(contract.code)}</span><div class="bar-track"><div class="bar-fill" style="width:${percent}%"></div></div><span class="bar-value">${percent}%</span></div>`; }).join("")}</div>` })}
       ${card({ title: "Công nợ phải thu", iconName: "card", body: `<div class="bar-list">${arRecords().map((record) => `<div class="bar-row"><span class="bar-label">${escapeHtml(record.id)} · ${escapeHtml(customerName(record.customerId))}</span><div class="bar-track"><div class="bar-fill ${arStatusKey(record) === "overdue" ? "" : "success"}" style="width:${Math.min(100, Math.round(record.remaining / Math.max(record.total, 1) * 100))}%;${arStatusKey(record) === "overdue" ? "background:var(--danger)" : ""}"></div></div><span class="bar-value">${money(record.remaining)}</span></div>`).join("")}</div>` })}
     </div>
-  </div>`;
-  const content = active === "sales" ? salesContent : active === "inventory" ? inventoryContent : managementContent;
+  </div>` : "";
+  const content = inventory ? inventoryReportView(inventory) : salesContent || managementContent;
   return `${pageHead({
     title: "Báo cáo & phân tích",
     subtitle: "Doanh thu, hiệu suất, nhập - xuất - tồn và các chỉ số vận hành K01–K06.",
-    actions: `${active === "sales" ? `<select class="select-sm" data-report-period aria-label="Kỳ báo cáo"><option value="all" ${state.ui.reportPeriod === "all" || !state.ui.reportPeriod ? "selected" : ""}>Toàn bộ thời gian</option><option value="month" ${state.ui.reportPeriod === "month" ? "selected" : ""}>Tháng hiện tại</option><option value="quarter" ${state.ui.reportPeriod === "quarter" ? "selected" : ""}>Quý hiện tại</option></select>` : ""}<button class="btn btn-secondary" data-action="export-report">${icon("download")} Xuất báo cáo</button>`
+    actions: inventory ? reportExportActions("export-inventory", inventory.rows.length > 0) : `${active === "sales" ? `<select class="select-sm" data-report-period aria-label="Kỳ báo cáo"><option value="all" ${state.ui.reportPeriod === "all" || !state.ui.reportPeriod ? "selected" : ""}>Toàn bộ thời gian</option><option value="month" ${state.ui.reportPeriod === "month" ? "selected" : ""}>Tháng hiện tại</option><option value="quarter" ${state.ui.reportPeriod === "quarter" ? "selected" : ""}>Quý hiện tại</option></select>` : ""}<button class="btn btn-secondary" data-action="export-report">${icon("download")} Xuất CSV</button>`
   })}
   <div class="card">
     ${tabsBar("report", tabs, active)}
@@ -806,7 +826,7 @@ function viewAudit() {
   return `${pageHead({
     title: "Lịch sử xử lý & phê duyệt",
     subtitle: "Nhật ký kiểm toán của mọi thao tác gửi duyệt, xác nhận, từ chối, hủy chứng từ.",
-    actions: `<button class="btn btn-secondary" data-action="export-audit">${icon("download")} Xuất Excel/CSV</button>`
+    actions: canExportApprovalHistory() ? reportExportActions("export-audit") : ""
   })}
   <div class="card">
     <div class="table-toolbar">
@@ -881,17 +901,51 @@ function viewPurchaseRequests() {
   </div>`;
 }
 
+function purchaseAttachment(id, reference) {
+  const file = id && state.attachments[id];
+  return file && file.reference === reference ? `<button type="button" class="file-chip" data-action="view-attachment" data-id="${escapeHtml(id)}">${icon("file")}${escapeHtml(file.name)}</button>` : '<span class="hint">Không có tệp đính kèm.</span>';
+}
+
+function purchaseVerifiedTime(timestamp) {
+  return new Date(timestamp).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+function purchaseCostDetails(receipt) {
+  const entry = receipt.costAdjustment;
+  if (!entry) return `<p class="small muted">Phiếu ${escapeHtml(receipt.code)} có sai lệch đã xác nhận. Chờ Kế toán đối chiếu, không tự tính số tiền.</p>${ACTION_ROLES["record-purchase-cost"].includes(state.role) ? `<button class="btn btn-secondary btn-sm mt-12" data-action="record-purchase-cost" data-code="${escapeHtml(receipt.code)}">Ghi nhận điều chỉnh chi phí</button>` : ""}`;
+  return `<p class="strong">Điều chỉnh đã xác minh: ${entry.delta > 0 ? "+" : ""}${money(entry.delta)}</p><p class="small muted mt-8">${escapeHtml(entry.reference)} · ${escapeHtml(entry.verifiedBy)} · ${escapeHtml(purchaseVerifiedTime(entry.verifiedAt))}</p><p class="small mt-8 mb-8">${escapeHtml(entry.note)}</p>${purchaseAttachment(entry.evidenceId, receipt.code)}`;
+}
+
+function purchaseOrderDetails(order) {
+  const request = state.purchaseRequests.find((item) => item.code === order.request);
+  const receipts = state.receipts.filter((item) => item.po === order.code && !item.source);
+  const payments = order.supplierPayments || [];
+  const costReceipt = purchaseCostReceipt(order);
+  return `${statusChip(order.status)}<div class="summary-list mt-16">
+    <div class="summary-row"><span>Yêu cầu mua</span><span class="value">${escapeHtml(order.request)}</span></div>
+    <div class="summary-row"><span>Giá trị đặt hàng</span><span class="value">${money(order.amount)}</span></div>
+    <div class="summary-row"><span>Điều khoản thanh toán</span><span class="value">${escapeHtml(order.terms)}</span></div>
+  </div><div class="mt-16"><div class="section-title">Báo giá nhà cung cấp</div>${purchaseAttachment(request?.quoteAttachmentId, order.request)}</div>
+  <div class="mt-16"><div class="section-title">Lịch sử tiếp nhận</div>${receipts.map((receipt) => `<div class="picker-row"><a class="link-btn" href="${hrefFor("receipts", receipt.code)}">${escapeHtml(receipt.code)}</a><span>${escapeHtml(receipt.eta)}</span>${statusChip(receipt.status)}</div>`).join("") || '<p class="hint">Chưa có phiếu tiếp nhận.</p>'}</div>
+  <div class="mt-16"><div class="section-title">Đối chiếu thanh toán nhà cung cấp</div><p class="small muted">Chỉ theo dõi khoản đã xác minh, không thực hiện giao dịch.</p>
+    ${payments.length ? `<p class="strong mt-8">Tổng đã đối chiếu: ${money(payments.reduce((sum, entry) => sum + entry.amount, 0))}</p>` : '<p class="hint mt-8">Chưa ghi nhận khoản thanh toán đã xác minh.</p>'}
+    ${payments.map((entry) => `<div class="mt-12"><p class="strong">${money(entry.amount)} · ${escapeHtml(entry.date)}</p><p class="small muted mb-8">${escapeHtml(entry.reference)} · ${escapeHtml(entry.verifiedBy)} · ${escapeHtml(purchaseVerifiedTime(entry.verifiedAt))}</p>${purchaseAttachment(entry.evidenceId, order.code)}</div>`).join("")}
+    ${ACTION_ROLES["record-supplier-payment"].includes(state.role) ? `<button class="btn btn-secondary btn-sm mt-12" data-action="record-supplier-payment" data-code="${escapeHtml(order.code)}">Đối chiếu khoản đã trả</button>` : ""}
+  </div>${costReceipt ? `<div class="mt-16"><div class="section-title">Đối chiếu chi phí mua hàng</div>${purchaseCostDetails(costReceipt)}</div>` : ""}`;
+}
+
 function viewPurchaseOrders() {
   const rows = state.purchaseOrders.map((order) => ({
     cells: [
-      `<span class="strong">${escapeHtml(order.code)}</span><div class="cell-sub">${escapeHtml(order.createdAt)}</div>`,
+      `<button class="link-btn strong" data-action="open-po" data-code="${escapeHtml(order.code)}">${escapeHtml(order.code)}</button><div class="cell-sub">${escapeHtml(order.createdAt)}</div>`,
       `<span>${escapeHtml(supplierName(order.supplier))}</span>`,
       `<span class="mono-code">${escapeHtml(order.request)}</span>`,
       `<span>${escapeHtml(order.receiveDate)}</span>`,
       `<span class="num strong">${money(order.amount)}</span>`,
       `<span>${escapeHtml(order.terms)}</span>`,
       statusChip(order.status),
-      order.receipt ? `<a class="link-btn" href="${hrefFor("receipts", order.receipt)}">${escapeHtml(order.receipt)}</a>` : `<button class="btn btn-secondary btn-sm" data-action="create-receipt" data-code="${order.code}">Tiếp nhận</button>`
+      order.receipt ? `<a class="link-btn" href="${hrefFor("receipts", order.receipt)}">${escapeHtml(order.receipt)}</a>` : canStartPoReceipt(order) ? `<button class="btn btn-secondary btn-sm" data-action="create-receipt" data-code="${escapeHtml(order.code)}">Tiếp nhận</button>` : "—",
+      `<span>${order.supplierPayments?.length ? `${order.supplierPayments.length} khoản đã đối chiếu` : "Chưa ghi nhận"}</span>${purchaseCostReceipt(order) ? `<div class="cell-sub">${purchaseCostReceipt(order).costAdjustment ? "Đã đối chiếu chi phí" : "Chờ đối chiếu chi phí"}</div>` : ""}`
     ]
   }));
   return `${pageHead({
@@ -908,10 +962,50 @@ function viewPurchaseOrders() {
       { label: "Giá trị", align: "num" },
       { label: "Điều khoản" },
       { label: "Trạng thái" },
-      { label: "Phiếu nhận" }
-    ], rows, { minWidth: 980 })}
+       { label: "Phiếu nhận" },
+       { label: "Đối chiếu" }
+    ], rows, { minWidth: 1080 })}
     <div class="table-footer"><span>${state.purchaseOrders.length} đơn đặt hàng</span><span>${state.purchaseOrders.filter((order) => order.status === "receiving").length} đang tiếp nhận</span></div>
   </div>`;
+}
+
+function returnDeliveryTime(value) {
+  if (!value || !Number.isFinite(Date.parse(value))) return "—";
+  return new Date(value).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+function deliveryAttachment(id, label) {
+  return id ? `<button class="file-chip" type="button" data-action="view-attachment" data-id="${escapeHtml(id)}">${icon("file")}${escapeHtml(label)}</button>` : "";
+}
+
+function deliveryDetails(delivery) {
+  const code = escapeHtml(delivery.code);
+  const blocked = delivery.status !== "delivered" && deliveryReturnBlock(delivery);
+  const attempts = deliveryAttempts(delivery);
+  const footer = delivery.status === "shipping" && ACTION_ROLES["delivery-result"].includes(state.role) && !deliveryReturnBlock(delivery, true)
+    ? `<button class="btn btn-danger" data-action="delivery-result" data-code="${code}" data-result="failed">Giao thất bại</button>${blocked ? "" : `<button class="btn btn-secondary" data-action="delivery-result" data-code="${code}" data-result="delivery_partial">Giao một phần</button><button class="btn btn-primary" data-action="delivery-result" data-code="${code}" data-result="delivered">Giao đủ</button>`}`
+    : !blocked && ["delivery_pending", "failed", "delivery_partial"].includes(delivery.status) && ACTION_ROLES["schedule-delivery"].includes(state.role)
+      ? `<button class="btn btn-primary" data-action="schedule-delivery" data-code="${code}">${delivery.status === "delivery_pending" ? "Bàn giao vận chuyển" : "Giao lại phần còn thiếu"}</button>` : "";
+  const summary = [["Phiếu xuất", delivery.issue], ["Đơn vị vận chuyển", delivery.carrier || "Chưa bàn giao"], ["Ngày dự kiến", delivery.planned], ["Mã vận đơn", delivery.tracking], ["Chi phí", money(delivery.fee)], ["Bên chịu phí", delivery.payer], ["Ghi chú", delivery.note]];
+  const rows = (delivery.items || []).map(({ sku, qty }) => {
+    const accepted = deliveryAcceptedQty(delivery, sku);
+    return `<div class="picker-row">${productCell(sku)}<span>Xuất: ${num(qty)} · Khách đã nhận: ${num(accepted)} · Còn giao: ${num(qty - accepted)}</span></div>`;
+  }).join("");
+  const history = attempts.map((attempt, index) => `<div class="mt-12"><strong>Lần ${index + 1}</strong> ${statusChip(attempt.status)}<div class="small">Nhận xác nhận: ${escapeHtml(returnDeliveryTime(attempt.resultReceivedAt))} · Ghi kết quả: ${escapeHtml(returnDeliveryTime(attempt.resultRecordedAt))}</div><div class="small">Đã nhận lần này: ${escapeHtml((attempt.acceptedItems || []).map(({ sku, qty }) => `${sku}: ${num(qty)}`).join(" · "))}</div>${attempt.reason ? `<div class="small">${escapeHtml(attempt.reason)}</div>` : ""}${deliveryAttachment(attempt.evidenceId, "Biên bản giao nhận")}</div>`).join("");
+  const body = `${statusChip(delivery.status)}<div class="summary-list mt-16">${summary.map(([label, value]) => `<div class="summary-row"><span>${escapeHtml(label)}</span><span class="value">${escapeHtml(value || "—")}</span></div>`).join("")}</div>${rows}${history ? `<h3 class="section-title mt-16">Lịch sử kết quả giao</h3>${history}` : deliveryAttachment(delivery.evidenceId, "Biên bản giao nhận")}${blocked ? `<div class="banner warning mt-16">${escapeHtml(blocked)}</div>` : `<div class="banner info mt-16">Ghi nhận số thực nhận theo từng SKU; mọi lần giao có khách nhận hàng cần biên bản có chữ ký.</div>`}`;
+  return { drawer: true, title: delivery.code, subtitle: `${delivery.order} · ${customerName(delivery.customerId)}`, body, footer };
+}
+
+function returnDetails(item) {
+  const code = escapeHtml(item.code), candidates = returnDeliveryCandidates(item);
+  const deliveryLabel = item.delivery || (candidates.length === 1 ? `${candidates[0].code} (suy ra từ hồ sơ cũ)` : "Chưa xác định duy nhất");
+  const condition = item.condition === "mixed" ? "Có hàng đạt và hàng hư hỏng" : item.condition === "good" ? "Đủ điều kiện bán lại" : item.condition === "damaged" ? "Hư hỏng / chờ xử lý" : "";
+  const receipt = item.receivedAt ? `<div class="mt-12"><strong>Thực nhận: ${num(item.receivedQty ?? item.qty)}</strong><div class="small">Lúc ${escapeHtml(returnDeliveryTime(item.receivedAt))}${item.receiptRecordedAt ? ` · Ghi lúc ${escapeHtml(returnDeliveryTime(item.receiptRecordedAt))}` : ""}</div><div class="small">${escapeHtml(item.receiptNote)}</div>${deliveryAttachment(item.receiptEvidenceId, "Chứng từ nhận hàng hoàn")}</div>` : "";
+  const resolution = (item.resolutionEvidence || []).map((entry) => `<div class="mt-12"><strong>${entry.track === "finance" ? "Tiền / công nợ" : "Đổi bù"} · ${escapeHtml(entry.reference)}</strong><div class="small">${escapeHtml(entry.note)} · ${escapeHtml(returnDeliveryTime(entry.recordedAt))}</div>${deliveryAttachment(entry.evidenceId, "Chứng từ đối chiếu")}</div>`).join("");
+  const actionButton = (action, label, style = "primary") => ACTION_ROLES[action].includes(state.role) ? `<button class="btn btn-${style}" data-action="${action}" data-code="${code}">${label}</button>` : "";
+  const footer = item.status === "inspecting" && !returnIsPosted(item) ? actionButton("return-receive", "Ghi nhận thực nhận") : item.status === "return_received" && !returnIsPosted(item) ? actionButton("return-inspection", "Kiểm tra và nhập kho") : item.status === "completed" ? actionButton("return-finance-evidence", "Lưu chứng từ tiền / công nợ", "secondary") + actionButton("return-replacement-evidence", "Lưu chứng từ đổi bù", "secondary") : "";
+  const body = `${statusChip(item.status)}<p class="small mt-12">Chuyến giao: ${escapeHtml(deliveryLabel)}${item.returnKind === "undelivered" ? " · Hàng chưa giao" : item.returnKind === "customer" ? " · Khách trả hàng" : ""}</p><div class="picker-row">${productCell(item.sku)}<strong>SL phiếu: ${num(item.qty)}</strong></div><p class="small mt-12">${escapeHtml(item.reason)} · ${escapeHtml(item.note)}</p>${item.remainderReturn ? `<p class="small">Yêu cầu gốc: ${num(item.originalRequestedQty)} · Phần chờ nhận: ${escapeHtml(item.remainderReturn)}</p>` : ""}${receipt}${item.postedAt ? `<p class="small mt-12">Đã nhập kho: ${escapeHtml(returnDeliveryTime(item.postedAt))}</p>` : ""}${condition ? `<p class="small mt-12">Phân loại: ${escapeHtml(condition)}${item.goodQty === undefined ? "" : ` · Đạt: ${num(item.goodQty)} · Lỗi: ${num(item.damagedQty)}`}</p>` : ""}${resolution}<div class="banner warning mt-16">Thực nhận không cập nhật tồn. Kho chỉ cập nhật khi xác nhận phân loại. Chứng từ tiền / đổi bù không phê duyệt hoặc tạo giao dịch.</div>`;
+  return { drawer: true, title: item.code, subtitle: `${item.order} · ${customerName(item.customerId)}`, body, footer };
 }
 
 function viewDeliveries() {
@@ -923,13 +1017,13 @@ function viewDeliveries() {
       `<span>${escapeHtml(delivery.planned)}</span>`,
       `<span class="num">${money(delivery.fee)}</span>`,
       `<span>${escapeHtml(delivery.payer)}</span>`,
-      statusChip(delivery.status),
-      `<button class="btn btn-ghost btn-sm" data-action="open-delivery" data-code="${escapeHtml(delivery.code)}">${icon("eye")}</button>`
+      `${statusChip(delivery.status)}${delivery.retryClosedAt && delivery.status === "delivery_partial" ? '<div class="cell-sub">Phần còn lại đã nhập hoàn</div>' : ""}`,
+      `<button class="btn btn-ghost btn-sm" data-action="open-delivery" data-code="${escapeHtml(delivery.code)}" aria-label="Xem chi tiết chuyến giao">${icon("eye")}</button>`
     ]
   }));
   return `${pageHead({
     title: "Theo dõi giao nhận",
-    subtitle: "Bàn giao, trạng thái giao hàng, chi phí vận chuyển và xử lý giao thất bại.",
+    subtitle: "Ghi nhận thực giao và phần còn giao theo SKU, từ bàn giao đến giao lại hoặc nhập hoàn.",
     actions: `<button class="btn btn-secondary" data-action="export-deliveries">${icon("download")} Xuất danh sách</button>`
   })}
   <div class="card">
@@ -951,25 +1045,25 @@ function viewReturns() {
   const rows = state.returns.map((item) => ({
     cells: [
       `<span class="strong">${escapeHtml(item.code)}</span><div class="cell-sub">${escapeHtml(item.createdAt)}</div>`,
-      `<span>${escapeHtml(item.order)}</span>`,
+      `<span>${escapeHtml(item.order)}</span><div class="cell-sub">${escapeHtml(item.delivery)}</div>`,
       `<span>${escapeHtml(customerName(item.customerId))}</span>`,
       productCell(item.sku),
-      `<span class="num">${num(item.qty)}</span>`,
+      `<span class="num">${num(item.qty)}</span><div class="cell-sub">${item.receivedAt ? `Đã nhận: ${num(item.receivedQty ?? item.qty)}` : "Chưa nhận"}</div>`,
       `<span>${escapeHtml(item.reason)}</span>`,
-      statusChip(item.status),
-      `<button class="btn btn-ghost btn-sm" data-action="open-return" data-code="${escapeHtml(item.code)}">${icon("eye")}</button>`
+      `${statusChip(item.status)}${item.status === "return_received" ? `<div class="cell-sub">${escapeHtml(returnDeliveryTime(item.receivedAt))}</div>` : ""}`,
+      `<button class="btn btn-ghost btn-sm" data-action="open-return" data-code="${escapeHtml(item.code)}" aria-label="Xem chi tiết hàng hoàn">${icon("eye")}</button>`
     ]
   }));
   return `${pageHead({
     title: "Đổi trả hàng hóa",
-    subtitle: "Tiếp nhận đổi trả đúng chính sách, kiểm tra hàng hoàn và xử lý tồn kho, tiền.",
-    actions: `<button class="btn btn-secondary" data-action="export-returns">${icon("download")} Xuất danh sách</button><button class="btn btn-primary" data-action="new-return">${icon("plus")} Tiếp nhận đổi trả</button>`
+    subtitle: "Theo dõi yêu cầu đổi trả, thời điểm thực nhận và xác nhận nhập kho riêng biệt.",
+    actions: `<button class="btn btn-secondary" data-action="export-returns">${icon("download")} Xuất danh sách</button>${ACTION_ROLES["new-return"].includes(state.role) ? `<button class="btn btn-primary" data-action="new-return">${icon("plus")} Tiếp nhận đổi trả</button>` : ""}${ACTION_ROLES["new-undelivered-return"].includes(state.role) ? `<button class="btn btn-primary" data-action="new-undelivered-return">${icon("plus")} Nhận hàng giao không thành công</button>` : ""}`
   })}
   <div class="banner warning mb-16">${icon("alert")}<div><strong>Chỉ tiếp nhận lỗi từ SoulWine hoặc đơn vị vận chuyển.</strong> Hàng không lỗi do khách đổi ý bị từ chối theo chính sách đã xác nhận.</div></div>
   <div class="card">
     ${dataTable([
       { label: "Yêu cầu" },
-      { label: "Đơn hàng" },
+      { label: "Đơn hàng / chuyến giao" },
       { label: "Khách hàng" },
       { label: "Sản phẩm" },
       { label: "SL", align: "num" },
@@ -1019,6 +1113,7 @@ function viewDocuments() {
 }
 
 function viewIssues() {
+  const pending = state.orders.filter((order) => order.issueRequest?.status === "pending");
   const rows = state.issues.map((issue) => ({
     cells: [
       `<span class="strong">${escapeHtml(issue.code)}</span><div class="cell-sub">${escapeHtml(issue.date)}</div>`,
@@ -1036,6 +1131,7 @@ function viewIssues() {
     actions: `<button class="btn btn-secondary" data-action="export-issues">${icon("download")} Xuất danh sách</button>`
   })}
   <div class="banner info mb-16">${icon("package")}<div><strong>Không xuất vượt lượng còn phải giao hoặc tồn vật lý.</strong> Hàng đang giữ cho đơn khác không được dùng để xuất cho đơn này.</div></div>
+  ${pending.length ? card({ title: "Yêu cầu xuất chờ xác nhận", body: `<div class="summary-list">${pending.map((order) => `<div class="summary-row"><div><strong>${escapeHtml(order.code)}</strong><div class="cell-sub">${escapeHtml(order.issueRequest.requestedBy)} · ${num(order.issueRequest.lines.reduce((sum, line) => sum + line.qty, 0))} đơn vị</div></div>${routeAllowed("orders") ? `<a href="${hrefFor("orders", order.code)}" class="btn btn-secondary btn-sm">Mở đơn</a>` : ""}</div>`).join("")}</div>` }) : ""}
   <div class="card">
     ${dataTable([
       { label: "Phiếu xuất" },
@@ -1136,7 +1232,7 @@ function viewAccounts() {
     subtitle: "Thông tin liên hệ, vai trò, tài khoản đăng nhập và tình trạng truy cập.",
     actions: `<button class="btn btn-primary" data-action="new-user">${icon("plus")} Thêm nhân sự</button>`
   })}
-  <div class="banner info mb-16">${icon("shield")}<div><strong>Giám đốc cấp mật khẩu ban đầu và cấp lại khi cần.</strong> Nhân sự đổi mật khẩu ở lần đăng nhập đầu hoặc qua “Quên mật khẩu” với mã OTP gửi tới email đăng ký. Tài khoản tạm khóa sau ${MAX_FAILED_LOGINS} lần nhập sai.</div></div>
+  <div class="banner info mb-16">${icon("shield")}<div><strong>Giám đốc cấp mật khẩu ban đầu và cấp lại khi cần.</strong> Nhân sự đổi mật khẩu ở lần đăng nhập đầu. Khôi phục mật khẩu trên thiết bị này không gửi thư điện tử. Tài khoản tạm khóa sau ${MAX_FAILED_LOGINS} lần nhập sai.</div></div>
   <div class="card">
     ${dataTable([
       { label: "Nhân sự" },
@@ -1158,11 +1254,11 @@ function matrixCell(value) {
 
 function viewRoles() {
   const columns = ["director", "accountant", "sales_manager", "sales_staff", "warehouse_manager", "warehouse_staff"];
-  const permissions = [["Tạo / sửa báo giá", "new-quote"], ["Tạo đơn hàng", "new-order"], ["Ghi nhận thanh toán", "open-payment"], ["Xác nhận giữ hàng", "open-reserve"], ["Xác nhận xuất kho", "issue-order"], ["Xác nhận nhập kho", "confirm-receipt"], ["Lập yêu cầu mua", "new-purchase-request"], ["Hoàn tất kiểm kê", "complete-stocktake"], ["Quản lý nhân sự", "new-user"]].map(([label, action]) => ({ label, values: columns.map((role) => ACTION_ROLES[action].includes(role) ? "yes" : "no") }));
+  const permissions = [...CONFIGURABLE_ACTIONS, ["Quản lý nhân sự", "new-user"]].map(([label, action]) => ({ label, values: columns.map((role) => actionRoles(action).includes(role) ? "yes" : "no") }));
   return `${pageHead({
     title: "Phân quyền theo vai trò",
     subtitle: "Phạm vi chức năng theo vai trò đang được áp dụng trong không gian làm việc.",
-    actions: `<button class="btn btn-secondary" data-action="export-roles">${icon("download")} Xuất ma trận</button>`
+    actions: `<button class="btn btn-secondary" data-action="export-roles">${icon("download")} Xuất ma trận</button><button class="btn btn-primary" data-action="configure-permissions">${icon("edit")} Điều chỉnh quyền</button>`
   })}
   <div class="banner info mb-16">${icon("shield")}<div>Vai trò hiển thị chức năng phù hợp trên thiết bị. Phân quyền và bảo vệ dữ liệu khi triển khai nhiều người dùng cần được thực thi bởi dịch vụ xác thực và máy chủ.</div></div>
   <div class="card">

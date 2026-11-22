@@ -1,7 +1,8 @@
-import { ApiError, forbidden, corsHeaders, notFound } from "./http/http.js";
-import { changePassword, forgotPassword, login, logout, readOutbox, reissuePassword, resetPassword, requirePermission, requireSession, requireFullSession, selectRole, unlockAccount } from "./auth/auth.js";
+import { ApiError, badRequest, forbidden, corsHeaders, notFound } from "./http/http.js";
+import { changePassword, forgotPassword, login, logout, reissuePassword, resetPassword, requirePermission, requireSession, requireFullSession, selectRole, unlockAccount } from "./auth/auth.js";
 import { availableOf, eligibilityReason, orderEligible, services, stockSummary } from "./domain/domain.js";
 import { queryJournal } from "./store/store.js";
+import { readSharedWorkspace, saveSharedWorkspace } from "./store/shared-workspace.js";
 
 function requirePerm(ctx, permission) {
   requirePermission(ctx, permission);
@@ -17,7 +18,7 @@ function findOne(ctx, name, key) {
   return record;
 }
 
-export function registerRoutes(router, store) {
+export function registerRoutes(router, store, recoveryMailer) {
   router.get("/api", () => ({ name: "SoulWine Operations API", version: "1.0.0", health: "/api/health", authentication: "Bearer session token", storage: "SQLite WAL", audit: "/api/audit" }));
   router.get("/api/health", () => ({ ok: true, revision: store.state.revision, uptimeSeconds: Math.round(process.uptime()) }));
   router.post("/api/activity", (ctx) => {
@@ -31,12 +32,11 @@ export function registerRoutes(router, store) {
   });
 
   router.post("/api/auth/login", (ctx) => login(store, ctx, ctx.body));
-  router.post("/api/auth/forgot", (ctx) => forgotPassword(store, ctx, ctx.body));
-  router.post("/api/auth/reset-password", (ctx) => resetPassword(store, ctx, ctx.body));
+  router.post("/api/auth/forgot", (ctx) => forgotPassword(store, ctx, ctx.body, recoveryMailer));
+  router.post("/api/auth/reset-password", (ctx) => resetPassword(store, ctx, ctx.body, recoveryMailer));
   router.post("/api/auth/logout", (ctx) => { requireSession(ctx); return logout(store, ctx); });
   router.post("/api/auth/session", (ctx) => selectRole(store, ctx, ctx.body));
   router.post("/api/auth/change-password", (ctx) => changePassword(store, ctx, ctx.body));
-  router.get("/api/auth/outbox", (ctx) => readOutbox(store, ctx, ctx.query));
 
   router.get("/api/users", (ctx) => { requirePerm(ctx, "users.read"); return { items: store.list("users").map((user) => ({ ...user, credential: (() => { const credential = store.find("credentials", user.id); return { email: credential.email, mustChange: credential.mustChange, locked: credential.locked, lockUntil: credential.lockUntil, pending: credential.pending }; })() })), total: store.list("users").length }; });
   router.post("/api/users", (ctx) => { requirePerm(ctx, "users.write"); return services.users.create(store, ctx, ctx.body); });
@@ -136,6 +136,19 @@ export function registerRoutes(router, store) {
       tx.note(`${ctx.actor.name} lưu chứng từ ${code}.`);
     });
     return created;
+  });
+
+  router.get("/api/workspace", (ctx) => {
+    requireFullSession(ctx);
+    const record = readSharedWorkspace(ctx.store);
+    if (!record) return { exists: false, revision: 0, savedAt: null };
+    if (ctx.query.meta === "1") return { exists: true, revision: record.revision, savedAt: record.savedAt };
+    return { exists: true, version: 1, revision: record.revision, savedAt: record.savedAt, data: record.data };
+  });
+
+  router.put("/api/workspace", (ctx) => {
+    requireFullSession(ctx);
+    return saveSharedWorkspace(ctx.store, { actor: ctx.actor, requestId: ctx.requestId, method: ctx.method, route: ctx.pattern, ip: ctx.ip, userAgent: ctx.userAgent }, ctx.body);
   });
 
   router.get("/api/audit", (ctx) => {

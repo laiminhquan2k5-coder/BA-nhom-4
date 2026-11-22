@@ -23,6 +23,12 @@ export function hashOtp(code, salt) {
   return crypto.scryptSync(code, salt, 32).toString("hex");
 }
 
+export function verifyOtp(code, salt, expectedHash) {
+  const a = Buffer.from(hashOtp(code, salt), "hex");
+  const b = Buffer.from(expectedHash, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function newToken() {
   return crypto.randomBytes(32).toString("hex");
 }

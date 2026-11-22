@@ -5,7 +5,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const config = {
   production: process.env.NODE_ENV === "production",
-  allowDevOutbox: process.env.NODE_ENV !== "production" && process.env.ALLOW_DEV_OUTBOX === "true",
   logRequests: process.env.LOG_REQUESTS !== "false",
   bootstrapAdmin: { email: process.env.BOOTSTRAP_ADMIN_EMAIL || "", password: process.env.BOOTSTRAP_ADMIN_PASSWORD || "", name: process.env.BOOTSTRAP_ADMIN_NAME || "Quản trị SoulWine" },
   port: Number(process.env.PORT || 8787),
@@ -13,11 +12,13 @@ export const config = {
   dataDir: process.env.DATA_DIR || path.join(here, "..", "data"),
   sessionTtlMinutes: Number(process.env.SESSION_TTL_MINUTES || 720),
   bodyLimitBytes: 1024 * 1024,
+  workspaceLimitBytes: 32 * 1024 * 1024,
   corsOrigins: (process.env.CORS_ORIGINS || "http://localhost:4173,http://127.0.0.1:4173").split(",").map((origin) => origin.trim()).filter(Boolean),
   auth: {
     maxFailedLogins: 5,
     lockMinutes: 15,
     otpMinutes: 5,
+    otpResendSeconds: 60,
     maxOtpAttempts: 5,
     scryptKeyLength: 64
   },

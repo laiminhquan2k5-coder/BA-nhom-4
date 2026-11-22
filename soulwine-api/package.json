@@ -11,6 +11,9 @@
     "backup": "node scripts/backup.js",
     "seed:sample": "node scripts/seed-sample.js"
   },
+  "dependencies": {
+    "nodemailer": "10.6.1"
+  },
   "engines": {
     "node": ">=24"
   }

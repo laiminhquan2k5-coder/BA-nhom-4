@@ -2,6 +2,7 @@
 const LOCK_MINUTES = 15;
 const OTP_MINUTES = 5;
 const MAX_OTP_ATTEMPTS = 5;
+// Public fixtures for the browser-local demo, not API accounts.
 const INITIAL_ACCOUNTS = {
   "U-001": { email: "quynh.nguyen@soulwine.vn", password: "SW-Giamdoc@2026" },
   "U-002": { email: "hanh.nguyen@soulwine.vn", password: "SW-Ketoan@2026" },
@@ -9,7 +10,7 @@ const INITIAL_ACCOUNTS = {
   "U-004": { email: "huyen.pham@soulwine.vn", password: "SW-Nvbanhang@2026" },
   "U-005": { email: "ngan.pham@soulwine.vn", password: "SW-Kho@2026" }
 };
-const loginFlow = { mode: "login", email: "", userId: "", error: "", notice: "", otp: null };
+const loginFlow = { mode: "login", email: "", userId: "", error: "", notice: "", otp: null, initialPassword: "", newPassword: "" };
 let otpTimer = null;
 let authBootError = "";
 
@@ -89,6 +90,8 @@ function resetLoginFlow() {
   loginFlow.error = "";
   loginFlow.notice = "";
   loginFlow.otp = null;
+  loginFlow.initialPassword = "";
+  loginFlow.newPassword = "";
 }
 
 function loginBrandPanel() {
@@ -110,11 +113,12 @@ function renderLoginScreen() {
     card = `<form class="login-card" id="login-form" novalidate>
       <span class="eyebrow">ĐĂNG NHẬP</span>
       <h2>Chào mừng trở lại</h2>
+      <p class="muted">Tài khoản dùng chung giữa các bộ phận khi máy chủ dữ liệu đã kết nối; chưa kết nối thì dữ liệu nằm trong trình duyệt này.</p>
       ${feedback}
       <div class="field"><label for="login-email">Email</label><input class="input" id="login-email" name="email" type="email" autocomplete="username" value="${escapeHtml(loginFlow.email)}" required></div>
       <div class="field"><label for="login-password">Mật khẩu</label><div class="input-affix"><input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required><button type="button" class="password-toggle" data-toggle-password="login-password" aria-label="Hiện hoặc ẩn mật khẩu">${icon("eye")}</button></div></div>
       <button class="btn btn-primary btn-block mt-16" type="submit">${icon("logout")} Đăng nhập</button>
-      <div class="login-row"><button class="link-btn" type="button" data-auth-mode="forgot">Quên mật khẩu?</button></div>
+      <div class="login-row"><button class="link-btn" type="button" data-auth-mode="forgot">Quên mật khẩu demo?</button></div>
     </form>`;
   } else if (loginFlow.mode === "must-change") {
     card = `<form class="login-card" id="must-change-form" novalidate>
@@ -143,10 +147,10 @@ function renderLoginScreen() {
     card = `<form class="login-card" id="forgot-form" novalidate>
       <span class="eyebrow">KHÔI PHỤC QUYỀN TRUY CẬP</span>
       <h2>Quên mật khẩu</h2>
-      <p class="muted">Nhập email đăng ký. Hệ thống tạo mã xác nhận (OTP) hợp lệ ${OTP_MINUTES} phút để đặt lại mật khẩu và mở khóa tài khoản.</p>
+      <p class="muted">Chỉ đặt lại mật khẩu demo lưu trong trình duyệt này. Mã xác nhận có hiệu lực ${OTP_MINUTES} phút, hiển thị tại đây và không được gửi qua email.</p>
       ${feedback}
       <div class="field"><label for="forgot-email">Email đăng ký</label><input class="input" id="forgot-email" name="email" type="email" autocomplete="username" value="${escapeHtml(loginFlow.email)}" required></div>
-      <button class="btn btn-primary btn-block mt-16" type="submit">${icon("arrow-right")} Tiếp tục</button>
+      <button class="btn btn-primary btn-block mt-16" type="submit">${icon("arrow-right")} Tạo mã demo</button>
       <div class="login-row"><button class="link-btn" type="button" data-auth-mode="login">Quay lại đăng nhập</button></div>
     </form>`;
   } else if (loginFlow.mode === "forgot-otp") {
@@ -159,10 +163,10 @@ function renderLoginScreen() {
       ${feedback}
       <div class="field"><label for="otp-code">Mã xác nhận (OTP)</label><input class="input" id="otp-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></div>
       <button class="btn btn-primary btn-block mt-16" type="submit">${icon("check")} Xác nhận mã</button>
-      <div class="login-row"><button class="link-btn" type="button" data-auth-mode="forgot">Đổi email khác</button><button class="link-btn" type="button" data-auth-mode="resend">Gửi lại mã</button></div>
+      <div class="login-row"><button class="link-btn" type="button" data-auth-mode="forgot">Đổi email khác</button><button class="link-btn" type="button" data-auth-mode="resend">Tạo mã mới</button></div>
       <div class="otp-inbox" aria-live="polite">
-        <div class="otp-inbox-head">${icon("mail")}<div><strong>Hộp thư trên thiết bị</strong><small>Bản giao diện chạy cục bộ chưa kết nối dịch vụ email. Khi có máy chủ, mã này sẽ được gửi tới ${escapeHtml(otp.email)}.</small></div></div>
-        <div class="otp-inbox-body"><span class="otp-from">SoulWine Operations &lt;no-reply@soulwine.vn&gt;</span><span class="otp-to">Tới: ${escapeHtml(otp.email)}</span><strong>Mã khôi phục: <span class="otp-code">${otp.code}</span></strong><span class="otp-countdown" id="otp-countdown">Còn ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}</span></div>
+        <div class="otp-inbox-head">${icon("mail")}<div><strong>Mã demo trên thiết bị</strong><small>Không có email nào được gửi. Mã này không dùng được cho tài khoản máy chủ.</small></div></div>
+        <div class="otp-inbox-body"><strong>Mã khôi phục demo: <span class="otp-code">${otp.code}</span></strong><span class="otp-countdown" id="otp-countdown">Còn ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}</span></div>
       </div>
     </form>`;
   } else if (loginFlow.mode === "forgot-reset") {
@@ -185,7 +189,7 @@ function renderLoginScreen() {
       const element = document.getElementById("otp-countdown");
       if (!element) return clearInterval(otpTimer);
       const seconds = Math.max(0, Math.floor((loginFlow.otp.expiresAt - Date.now()) / 1000));
-      element.textContent = seconds ? `Còn ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}` : "Mã đã hết hạn. Chọn Gửi lại mã.";
+      element.textContent = seconds ? `Còn ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}` : "Mã đã hết hạn. Chọn Tạo mã mới.";
     }, 1000);
   }
 }
@@ -200,10 +204,14 @@ function proceedToWorkspace() {
 function finishLogin(role) {
   const userId = loginFlow.userId;
   const email = loginFlow.email;
+  const initialPassword = loginFlow.initialPassword;
+  const newPassword = loginFlow.newPassword;
   resetLoginFlow();
+  serverSync.sessionLogin = { email, apiPassword: initialPassword, newPassword, role };
   enterWorkspace(userId, role);
   addAudit("Đăng nhập hệ thống", email, `Vai trò: ${ROLES[role].label}`);
   toast(`Xin chào ${currentUser().name}.`, "info");
+  serverSyncFinishLogin(email, initialPassword, newPassword, role);
 }
 
 async function attemptLogin(form) {
@@ -237,6 +245,7 @@ async function attemptLogin(form) {
   persistWorkspace();
   loginFlow.email = credential.email;
   loginFlow.userId = credential.userId;
+  loginFlow.initialPassword = password;
   state.activeUserId = user.id;
   if (credential.mustChange) { loginFlow.mode = "must-change"; loginFlow.error = ""; loginFlow.notice = ""; return renderLoginScreen(); }
   proceedToWorkspace();
@@ -259,9 +268,14 @@ async function submitMustChange(form) {
   if (password !== confirm) return authError("Mật khẩu nhập lại chưa khớp.");
   if (await hashPassword(password, credential.salt) === credential.hash) return authError("Mật khẩu mới phải khác mật khẩu hiện tại.");
   await applyNewPassword(credential, password, "Đổi mật khẩu lần đầu");
+  loginFlow.newPassword = password;
   loginFlow.error = "";
   loginFlow.notice = "";
   proceedToWorkspace();
+}
+
+function issueDemoOtp(email) {
+  loginFlow.otp = { email, code: generateOtpCode(), expiresAt: Date.now() + OTP_MINUTES * 60000, attempts: 0 };
 }
 
 function startForgotPassword(form) {
@@ -269,30 +283,31 @@ function startForgotPassword(form) {
   if (!email) return authError("Nhập email đăng ký của tài khoản.");
   const credential = credentialByEmail(email);
   if (!credential) return authError("Email chưa được đăng ký trong hệ thống.");
-  const code = generateOtpCode();
   loginFlow.email = credential.email;
   loginFlow.userId = credential.userId;
-  loginFlow.otp = { email: credential.email, code, salt: randomToken(), hash: "", expiresAt: Date.now() + OTP_MINUTES * 60000, attempts: 0 };
-  hashPassword(code, loginFlow.otp.salt).then((hash) => { loginFlow.otp.hash = hash; });
+  issueDemoOtp(credential.email);
   loginFlow.mode = "forgot-otp";
   loginFlow.error = "";
   loginFlow.notice = "";
   renderLoginScreen();
 }
 
-async function verifyOtp(form) {
+function verifyOtp(form) {
   const otp = loginFlow.otp;
   if (!otp) { loginFlow.mode = "forgot"; return authError("Phiên khôi phục đã kết thúc. Bắt đầu lại."); }
   const code = form.code.value.trim();
-  if (Date.now() > otp.expiresAt) return authError(`Mã đã hết hạn sau ${OTP_MINUTES} phút. Chọn “Gửi lại mã”.`);
+  if (Date.now() >= otp.expiresAt) return authError(`Mã đã hết hạn sau ${OTP_MINUTES} phút. Chọn “Tạo mã mới”.`);
   if (!/^\d{6}$/.test(code)) return authError("Nhập mã gồm đúng 6 chữ số.");
   otp.attempts += 1;
-  if (otp.attempts > MAX_OTP_ATTEMPTS) {
-    loginFlow.mode = "forgot";
-    loginFlow.otp = null;
-    return authError(`Nhập sai quá ${MAX_OTP_ATTEMPTS} lần. Bắt đầu lại với email khác.`);
+  if (code !== otp.code) {
+    if (otp.attempts >= MAX_OTP_ATTEMPTS) {
+      loginFlow.mode = "forgot";
+      loginFlow.otp = null;
+      return authError(`Nhập sai ${MAX_OTP_ATTEMPTS} lần. Bắt đầu lại để tạo mã mới.`);
+    }
+    return authError(`Mã chưa đúng. Còn ${MAX_OTP_ATTEMPTS - otp.attempts} lần nhập.`);
   }
-  if (!otp.hash || await hashPassword(code, otp.salt) !== otp.hash) return authError(`Mã chưa đúng. Còn ${MAX_OTP_ATTEMPTS - otp.attempts + 1} lần nhập.`);
+  otp.verified = true;
   loginFlow.mode = "forgot-reset";
   loginFlow.error = "";
   loginFlow.notice = "";
@@ -300,6 +315,11 @@ async function verifyOtp(form) {
 }
 
 async function submitResetPassword(form) {
+  if (!loginFlow.otp?.verified || Date.now() >= loginFlow.otp.expiresAt) {
+    loginFlow.mode = "forgot";
+    loginFlow.otp = null;
+    return authError("Phiên khôi phục demo đã kết thúc. Bắt đầu lại.");
+  }
   const credential = credentialByUserId(loginFlow.userId);
   const password = form.password.value;
   const confirm = form.confirm.value;
@@ -307,7 +327,7 @@ async function submitResetPassword(form) {
   if (policy) return authError(policy);
   if (password !== confirm) return authError("Mật khẩu nhập lại chưa khớp.");
   if (!credential) { loginFlow.mode = "forgot"; loginFlow.otp = null; return authError("Tài khoản không còn tồn tại. Bắt đầu lại."); }
-  await applyNewPassword(credential, password, "Khôi phục mật khẩu qua OTP");
+  await applyNewPassword(credential, password, "Khôi phục mật khẩu demo");
   const updated = credentialByUserId(credential.userId);
   updated.mustChange = false;
   updated.failedAttempts = 0;
@@ -332,6 +352,7 @@ function showChangePasswordForm() {
     if (data.get("password") !== data.get("confirm")) return formError("Mật khẩu nhập lại chưa khớp.");
     if (await hashPassword(data.get("password"), credential.salt) === credential.hash) return formError("Mật khẩu mới phải khác mật khẩu hiện tại.");
     await applyNewPassword(credential, data.get("password"), "Đổi mật khẩu");
+    serverSyncChangePasswordRemote(data.get("current"), data.get("password"));
     closeDialog();
     toast("Đã đổi mật khẩu. Lần đăng nhập sau dùng mật khẩu mới.");
   }, { submitLabel: "Đổi mật khẩu" });
@@ -397,14 +418,12 @@ document.addEventListener("click", (event) => {
     if (next === "resend") {
       const previous = loginFlow.otp;
       if (!previous) { loginFlow.mode = "forgot"; return renderLoginScreen(); }
-      const code = generateOtpCode();
-      loginFlow.otp = { email: previous.email, code, salt: randomToken(), hash: "", expiresAt: Date.now() + OTP_MINUTES * 60000, attempts: 0 };
-      hashPassword(code, loginFlow.otp.salt).then((hash) => { loginFlow.otp.hash = hash; });
+      issueDemoOtp(previous.email);
       loginFlow.error = "";
       loginFlow.notice = "Đã tạo mã mới. Mã trước đó không còn hiệu lực.";
       return renderLoginScreen();
     }
-    if (next === "forgot") loginFlow.otp = null;
+    loginFlow.otp = null;
     loginFlow.mode = next === "forgot" ? "forgot" : "login";
     loginFlow.error = "";
     loginFlow.notice = "";

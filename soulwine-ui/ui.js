@@ -286,8 +286,8 @@ function quoteTableHtml(list) {
         `<div class="cell-main"><span class="strong">${escapeHtml(customerName(quote.customerId))}</span><span class="cell-sub">${escapeHtml(quote.channel)}</span></div>`,
         `<span class="num strong">${money(totals.total)}</span>`,
         `<span class="num ${totals.discount ? "" : "muted"}">${totals.discount ? "-" + money(totals.discount) : "—"}</span>`,
-        statusChip(quote.status),
-        `<span class="${quote.status === "expired" ? "muted" : ""}">${escapeHtml(quote.validUntil)}</span>`,
+        statusChip(quoteStatus(quote)),
+        `<span class="${quoteIsExpired(quote) ? "muted" : ""}">${escapeHtml(quote.validUntil)}</span>`,
         `<span>${escapeHtml(quote.owner)}</span>`,
         `<div class="row-actions"><a class="btn btn-ghost btn-sm" href="${hrefFor("quotes", quote.code)}">${icon("chevron-right")}</a></div>`
       ]
@@ -309,7 +309,7 @@ function filteredQuotes() {
   const filter = state.ui.quoteFilter;
   const search = state.ui.quoteSearch.trim().toLowerCase();
   return state.quotes.filter((quote) => {
-    const matchesFilter = filter === "all" || quote.status === filter;
+    const matchesFilter = filter === "all" || quoteStatus(quote) === filter;
     const haystack = `${quote.code} ${customerName(quote.customerId)} ${quote.owner}`.toLowerCase();
     return matchesFilter && (!search || haystack.includes(search));
   });
@@ -319,9 +319,7 @@ function viewQuotes() {
   const list = filteredQuotes();
   const tabs = [
     { value: "all", label: "Tất cả", count: state.quotes.length },
-    { value: "pending", label: "Chờ duyệt", count: state.quotes.filter((quote) => quote.status === "pending").length },
-    { value: "approved", label: "Đã duyệt", count: state.quotes.filter((quote) => quote.status === "approved").length },
-    { value: "expired", label: "Hết hiệu lực", count: state.quotes.filter((quote) => quote.status === "expired").length }
+    ...[["pending", "Chờ duyệt"], ["approved", "Đã duyệt"], ["rejected", "Từ chối"], ["expired", "Hết hiệu lực"]].map(([value, label]) => ({ value, label, count: state.quotes.filter((quote) => quoteStatus(quote) === value).length }))
   ];
   return `${pageHead({
     title: "Báo giá",
@@ -356,23 +354,37 @@ function quoteStockBadge(line) {
   return `<span class="stock-note low">${icon("alert")} Thiếu ${num(line.qty - available)} ${escapeHtml(product.unit.toLowerCase())}</span>`;
 }
 
+function quoteDiscountInputs(discount, basis, label, sku = "") {
+  const key = sku ? ` data-sku="${escapeHtml(sku)}"` : "";
+  const fixed = discount.mode === "fixed";
+  return `<div style="display:grid;gap:4px;min-width:130px">
+    <select class="select" data-qfield="discountMode"${key} aria-label="Cách tính ${label}">
+      <option value="percent" ${fixed ? "" : "selected"}>Tỷ lệ (%)</option>
+      <option value="fixed" ${fixed ? "selected" : ""}>Số tiền (VND)</option>
+    </select>
+    <div><input class="input" type="number" required min="0" max="${fixed ? basis : 100}" step="${fixed ? 1 : "any"}" value="${escapeHtml(discount.value)}" data-qfield="discount"${key} aria-label="Mức ${label}"></div>
+  </div>`;
+}
+
 function quoteLinesHtml(quote) {
   if (!quote.lines.length) {
     return `<tr><td colspan="8">${emptyState("wine", "Chưa có dòng hàng", "Thêm sản phẩm rượu hoặc quà tặng để bắt đầu báo giá.", `<button class="btn btn-secondary btn-sm" data-action="add-line">${icon("plus")} Thêm sản phẩm</button>`)}</td></tr>`;
   }
+  const editable = quoteEditable(quote);
   return quote.lines.map((line) => {
     const product = productBySku(line.sku);
-    const gross = (line.price ?? product.wholesale) * line.qty;
-    const lineTotal = gross - Math.round(gross * ((line.discount || 0) / 100));
+    const amounts = quoteLineTotals(line);
+    const discount = quoteLineDiscount(line);
+    const name = escapeHtml(productName(line.sku));
     return `<tr>
       <td>${productCell(line.sku)}</td>
-      <td class="muted">${escapeHtml(product.unit)}</td>
-      <td><input class="input qty" type="number" min="1" step="1" value="${line.qty}" data-qfield="qty" data-sku="${escapeHtml(line.sku)}" aria-label="Số lượng ${escapeHtml(product.name)}"></td>
-      <td class="num">${money(line.price ?? product.wholesale)}</td>
-      <td><input class="input discount" type="number" min="0" max="100" step="1" value="${line.discount || 0}" data-qfield="discount" data-sku="${escapeHtml(line.sku)}" aria-label="Chiết khấu ${escapeHtml(product.name)}"> </td>
-      <td class="num strong" data-line-total="${escapeHtml(line.sku)}">${money(lineTotal)}</td>
+      <td class="muted">${escapeHtml(product?.unit)}</td>
+      <td><input class="input qty" type="number" required min="1" max="1000000000" step="1" value="${escapeHtml(line.qty)}" data-qfield="qty" data-sku="${escapeHtml(line.sku)}" aria-label="Số lượng ${name}"></td>
+      <td class="num">${money(amounts.price)}</td>
+      <td>${editable ? quoteDiscountInputs(discount, amounts.subtotal, `chiết khấu ${name}`, line.sku) : escapeHtml(quoteDiscountLabel(discount))}</td>
+      <td class="num strong" data-line-total="${escapeHtml(line.sku)}">${money(amounts.total)}</td>
       <td data-stock-badge="${escapeHtml(line.sku)}">${quoteStockBadge(line)}</td>
-      <td><button class="btn btn-ghost btn-sm" data-action="remove-line" data-sku="${escapeHtml(line.sku)}" aria-label="Xóa ${escapeHtml(product.name)}">${icon("trash")}</button></td>
+      <td><button class="btn btn-ghost btn-sm" data-action="remove-line" data-sku="${escapeHtml(line.sku)}" aria-label="Xóa ${name}">${icon("trash")}</button></td>
     </tr>`;
   }).join("");
 }
@@ -402,9 +414,10 @@ function viewQuoteBuilder(code) {
     return pageHead({ title: "Không tìm thấy báo giá" }) + card({ body: emptyState("file", "Báo giá không tồn tại", "Liên kết có thể đã cũ hoặc báo giá đã bị xóa.", `<a class="btn btn-secondary" href="#/quotes">Quay lại danh sách</a>`) });
   }
   const totals = quoteTotals(quote);
-  const canPrint = quote.status === "approved" || quote.status === "confirmed";
+  const wholeDiscount = quoteWholeDiscount(quote);
+  const canPrint = ["approved", "confirmed"].includes(quote.status) && !quoteIsExpired(quote);
   const isPending = quote.status === "pending";
-  const isExpired = quote.status === "expired";
+  const isExpired = quoteIsExpired(quote);
   const approvalBanner = isExpired
     ? `<div class="banner danger mb-16">${icon("alert")}<div><strong>Báo giá đã hết hiệu lực ${escapeHtml(quote.validUntil)}.</strong> Tạo phiên bản mới trước khi gửi khách hoặc chuyển hợp đồng.</div></div>`
     : isPending
@@ -416,14 +429,14 @@ function viewQuoteBuilder(code) {
   return `${pageHead({
     breadcrumb: `<a href="#/quotes">Báo giá</a> ${icon("chevron-right")} <span>${escapeHtml(quote.code)}</span>`,
     title: quote.code,
-    status: statusChip(quote.status),
+    status: statusChip(quoteStatus(quote)),
     subtitle: `${customerName(quote.customerId)} · ${quote.channel} · Phiên bản v${quote.version}`,
     actions: `<a class="btn btn-ghost" href="#/quotes">${icon("arrow-left")} Quay lại</a>
       <button class="btn btn-secondary" data-action="duplicate-quote">${icon("plus")} Nhân bản</button>
-      ${quote.status === "approved" && !quote.confirmed ? `<button class="btn btn-secondary" data-action="confirm-quote">${icon("check")} Khách xác nhận</button>` : ""}
+      ${quote.status === "approved" && !quote.confirmed && !isExpired ? `<button class="btn btn-secondary" data-action="confirm-quote">${icon("check")} Khách xác nhận</button>` : ""}
       <button class="btn btn-secondary" data-action="save-quote">${icon("check")} Lưu thay đổi</button>
       <button class="btn btn-secondary" data-action="print-quote" ${canPrint ? "" : "disabled"}>${icon("printer")} Xuất PDF</button>
-      <button class="btn btn-primary" data-action="submit-quote" ${isPending || quote.status === "approved" || isExpired ? "disabled" : ""}>${icon("check-circle")} Gửi duyệt</button>`
+      <button class="btn btn-primary" data-action="submit-quote" ${quoteEditable(quote) ? "" : "disabled"}>${icon("check-circle")} Gửi duyệt</button>`
   })}
   ${approvalBanner}
   <div class="grid grid-main">
@@ -445,7 +458,7 @@ function viewQuoteBuilder(code) {
         iconName: "wine",
         actions: `<button class="btn btn-secondary btn-sm" data-action="add-line">${icon("plus")} Thêm sản phẩm</button>`,
         flush: true,
-        body: `<div class="table-wrap"><table class="data quote-lines" style="min-width:980px"><thead><tr><th>Sản phẩm</th><th>ĐVT</th><th class="num">SL</th><th class="num">Giá sỉ</th><th class="num">CK %</th><th class="num">Thành tiền</th><th>Tồn kho</th><th></th></tr></thead><tbody>${quoteLinesHtml(quote)}</tbody></table></div>`
+        body: `<div class="table-wrap"><table class="data quote-lines" style="min-width:980px"><thead><tr><th>Sản phẩm</th><th>ĐVT</th><th class="num">SL</th><th class="num">Giá sỉ</th><th>Chiết khấu dòng</th><th class="num">Thành tiền</th><th>Tồn kho</th><th></th></tr></thead><tbody>${quoteLinesHtml(quote)}</tbody></table></div>`
       })}
       ${card({
         title: "Ghi chú & điều khoản",
@@ -457,14 +470,20 @@ function viewQuoteBuilder(code) {
       ${card({
         title: "Tổng hợp báo giá",
         iconName: "card",
-        body: `<div class="summary-list">
+        body: `${quoteEditable(quote) ? `<div class="field mb-16"><label>Chiết khấu toàn báo giá</label>
+          ${quoteDiscountInputs(wholeDiscount, totals.afterLines, "chiết khấu toàn báo giá")}
+          <div class="hint">Tính trên số tiền còn lại sau chiết khấu từng dòng.</div></div>` : ""}
+        <div class="summary-list" aria-live="polite">
           <div class="summary-row"><span>Tạm tính</span><span class="value" id="q-subtotal">${money(totals.subtotal)}</span></div>
-          <div class="summary-row"><span>Chiết khấu</span><span class="value discount" id="q-discount">${totals.discount ? "-" + money(totals.discount) : "0 ₫"}</span></div>
+          <div class="summary-row"><span>Chiết khấu dòng</span><span class="value discount" id="q-line-discount">${discountMoney(totals.lineDiscount)}</span></div>
+          <div class="summary-row"><span>Sau chiết khấu dòng</span><span class="value" id="q-after-lines">${money(totals.afterLines)}</span></div>
+          <div class="summary-row"><span>Chiết khấu toàn báo giá${!quoteEditable(quote) && wholeDiscount.mode === "percent" && wholeDiscount.value ? ` (${escapeHtml(quoteDiscountLabel(wholeDiscount))})` : ""}</span><span class="value discount" id="q-whole-discount">${discountMoney(totals.wholeDiscount)}</span></div>
+          <div class="summary-row"><span>Tổng chiết khấu</span><span class="value discount" id="q-discount">${discountMoney(totals.discount)}</span></div>
           <div class="summary-row total"><span>Tổng cộng</span><span class="value" id="q-total">${money(totals.total)}</span></div>
         </div>
         <label class="checkline mt-16"><input type="checkbox" data-qcheck="confirmed" ${quote.confirmed ? "checked" : ""}> Khách đã xác nhận nội dung báo giá</label>
         <div class="card-foot" style="padding:14px 0 0;border-top:0">
-          <button class="btn btn-primary btn-block" data-action="submit-quote" ${isPending || quote.status === "approved" || isExpired ? "disabled" : ""}>${icon("check-circle")} Gửi duyệt chiết khấu</button>
+           <button class="btn btn-primary btn-block" data-action="submit-quote" ${quoteEditable(quote) ? "" : "disabled"}>${icon("check-circle")} Gửi duyệt chiết khấu</button>
         </div>
         <div class="hint mt-8">Mức chiết khấu chỉ có hiệu lực sau khi được Giám đốc phê duyệt.</div>`
       })}
@@ -481,7 +500,7 @@ function viewQuoteBuilder(code) {
         title: "Kiểm soát trước khi gửi",
         iconName: "shield",
         body: `<div class="rule-list">
-          <div class="rule-item">${icon("check-circle")}<div class="rule-main"><div class="rule-title">Không chiết khấu âm hoặc vượt 100%</div><div class="rule-sub">Hệ thống kiểm tra tại từng dòng và toàn báo giá.</div></div></div>
+          <div class="rule-item">${icon("check-circle")}<div class="rule-main"><div class="rule-title">Chiết khấu hợp lệ</div><div class="rule-sub">Tỷ lệ từ 0 đến 100%; số tiền VND không âm và không vượt giá trị áp dụng.</div></div></div>
           <div class="rule-item">${icon("check-circle")}<div class="rule-main"><div class="rule-title">Tồn khả dụng được kiểm tra theo từng dòng</div><div class="rule-sub">Cảnh báo nếu số lượng đặt vượt tồn khả dụng hiện tại.</div></div></div>
           <div class="rule-item">${icon("shield")}<div class="rule-main"><div class="rule-title">Không xuất PDF khi chưa duyệt</div><div class="rule-sub">Chỉ báo giá đã duyệt hoặc đã xác nhận mới được gửi khách.</div></div></div>
         </div>`
@@ -519,16 +538,15 @@ function viewOrderDetail(code) {
   const totalHeld = order.lines.reduce((sum, line) => sum + line.held, 0);
   const totalShipped = order.lines.reduce((sum, line) => sum + line.shipped, 0);
   const eligible = orderEligible(order);
-  const lock = stockLock();
+  const lock = stockLock(order.lines.filter((line) => line.held > 0).map((line) => line.sku));
+  const plan = issuePlan(order);
+  const hasRequest = order.issueRequest?.status === "pending";
+  const requestMatches = hasRequest && order.issueRequest.key === issuePlanKey(plan);
   const delivery = state.deliveries.find((item) => item.order === order.code);
   const paymentProgress = order.total ? Math.round((order.paid / order.total) * 100) : 0;
   const blockedReason = lock
     ? `Kho đang khóa kiểm kê ${lock.code}; không thể lập phiếu xuất.`
-    : !eligible
-      ? orderEligibilityReason(order)
-      : totalHeld <= 0
-        ? "Chưa có hàng đang giữ cho đơn này."
-        : "";
+    : plan.error || (!requestMatches ? "Chưa có yêu cầu xuất hợp lệ từ Bán hàng." : "");
   const trace = [
     { label: "Báo giá", code: order.quote || "—", status: quote ? quote.status : "planned", tone: quote && quote.status === "approved" ? "done" : "blocked" },
     { label: "Hợp đồng", code: order.contract || "—", status: contract ? contract.status : "planned", tone: contract && (contract.status === "active" || contract.status === "signed") ? "done" : "blocked" },
@@ -546,12 +564,16 @@ function viewOrderDetail(code) {
     subtitle: `${customerName(order.customerId)} · ${order.type} · ${order.channel}`,
     actions: `<a class="btn btn-ghost" href="#/orders">${icon("arrow-left")} Quay lại</a>
       <button class="btn btn-secondary" data-action="print-order" data-code="${escapeHtml(order.code)}">${icon("printer")} In đơn</button>
-      <button class="btn btn-secondary" data-action="open-payment" data-record="${escapeHtml(order.code)}" ${remaining <= 0 ? "disabled" : ""}>${icon("card")} Ghi nhận thanh toán</button>
-      <button class="btn btn-primary" data-action="issue-order" data-code="${escapeHtml(order.code)}" ${blockedReason ? "disabled" : ""} title="${escapeHtml(blockedReason)}">${icon("package")} Lập phiếu xuất</button>`
+      ${canChangeOrder(order) && ACTION_ROLES["edit-order"].includes(state.role) ? `<button class="btn btn-secondary" data-action="edit-order" data-code="${escapeHtml(order.code)}">${icon("edit")} Sửa đơn</button><button class="btn btn-secondary" data-action="cancel-order" data-code="${escapeHtml(order.code)}">Hủy đơn</button>` : ""}
+      <button class="btn btn-secondary" data-action="open-payment" data-record="${escapeHtml(order.code)}" ${remaining <= 0 || order.status === "cancelled" ? "disabled" : ""}>${icon("card")} Ghi nhận thanh toán</button>
+      ${ACTION_ROLES["request-issue"].includes(state.role) ? `<button class="btn btn-primary" data-action="request-issue" data-code="${escapeHtml(order.code)}" ${plan.error || hasRequest ? "disabled" : ""} title="${escapeHtml(plan.error || "")}">${icon("package")} Yêu cầu xuất kho</button>` : ""}
+      ${hasRequest && ACTION_ROLES["cancel-issue-request"].includes(state.role) ? `<button class="btn btn-secondary" data-action="cancel-issue-request" data-code="${escapeHtml(order.code)}">Hủy yêu cầu xuất</button>` : ""}
+      ${ACTION_ROLES["issue-order"].includes(state.role) ? `<button class="btn btn-primary" data-action="issue-order" data-code="${escapeHtml(order.code)}" ${blockedReason ? "disabled" : ""} title="${escapeHtml(blockedReason)}">${icon("package")} Xác nhận xuất kho</button>` : ""}`
   })}
-  ${lock ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Kho đang khóa kiểm kê ${escapeHtml(lock.code)}.</strong> Mọi thao tác nhập/xuất bị chặn đến khi kỳ kiểm kê hoàn tất.</div><a class="banner-link" href="${hrefFor("stocktakes", lock.code)}">Mở kỳ kiểm kê</a></div>` : ""}
-  ${!eligible ? `<div class="banner warning mb-16">${icon("alert")}<div><strong>Chưa đủ điều kiện giữ hàng.</strong> ${escapeHtml(orderEligibilityReason(order))}.</div><a class="banner-link" href="#/payments">Ghi nhận thanh toán</a></div>` : ""}
-  ${eligible && totalHeld > 0 && !lock ? `<div class="banner success mb-16">${icon("check-circle")}<div><strong>Đơn đã đủ điều kiện xuất kho.</strong> Đang giữ ${num(totalHeld)} đơn vị; lập phiếu xuất để giảm tồn và bàn giao.</div></div>` : ""}
+   ${lock ? `<div class="banner locked mb-16">${icon("lock")}<div><strong>Có hàng đang thuộc kỳ kiểm kê ${escapeHtml(lock.code)}.</strong> Không xác nhận xuất các SKU đang khóa cho tới khi kỳ được đóng.</div><a class="banner-link" href="${hrefFor("stocktakes", lock.code)}">Mở kỳ kiểm kê</a></div>` : ""}
+   ${order.status === "cancelled" ? `<div class="banner warning mb-16"><strong>Đơn đã hủy.</strong> ${escapeHtml(order.cancelReason || "")}</div>` : !eligible ? `<div class="banner warning mb-16">${icon("alert")}<div><strong>Chưa đủ điều kiện giữ hàng.</strong> ${escapeHtml(orderEligibilityReason(order))}.</div><a class="banner-link" href="#/payments">Ghi nhận thanh toán</a></div>` : ""}
+   ${order.paymentAdjustment ? `<div class="banner warning mb-16"><strong>Tiền chờ Kế toán đối chiếu: ${money(order.paymentAdjustment)}.</strong> Chưa ghi nhận hoàn tiền.</div>` : ""}
+   ${hasRequest ? `<div class="banner ${requestMatches ? "info" : "warning"} mb-16"><div><strong>Yêu cầu xuất của ${escapeHtml(order.issueRequest.requestedBy)}.</strong> ${requestMatches ? "Chờ Thủ kho xác nhận; chưa giảm tồn." : "Lượng giữ không còn khớp. Hủy yêu cầu và lập lại."}</div></div>` : !plan.error ? `<div class="banner success mb-16"><div><strong>Đủ điều kiện yêu cầu xuất kho.</strong> Bán hàng gửi yêu cầu trước khi Thủ kho ghi xuất.</div></div>` : ""}
   <div class="card mb-16"><div style="padding:14px 16px"><div class="trace">${trace.map((step) => `<div class="trace-step ${step.tone}"><span class="t-label">${escapeHtml(step.label)}</span><span class="t-code">${escapeHtml(step.code)}</span><span class="t-status">${STATUS_META[step.status] ? escapeHtml(STATUS_META[step.status].label) : escapeHtml(step.status)}</span></div>`).join("")}</div></div></div>
 
   <div class="stat-grid mb-16">
@@ -696,15 +718,15 @@ function viewContracts() {
 }
 
 const CONTRACT_CHECKS = [
-  ["customerConfirm", "Khách xác nhận nội dung hợp đồng"],
   ["accountantCheck", "Kế toán kiểm tra điều khoản"],
+  ["customerConfirm", "Khách xác nhận nội dung hợp đồng"],
   ["directorSign", "Giám đốc ký, đóng dấu"],
   ["customerSign", "Khách hoàn tất ký"],
   ["scan", "Bản scan đủ chữ ký đã tải lên"]
 ];
 
 function checklistHtml(contract) {
-  return `<div class="checklist">${CONTRACT_CHECKS.map(([key, label]) => `<button class="check-item ${contract.checklist[key] ? "checked" : ""}" data-action="contract-check" data-code="${escapeHtml(contract.code)}" data-field="${key}" ${!["pending_sign", "checking"].includes(contract.status) || contract.checklist[key] ? "disabled" : ""}>
+  return `<div class="checklist">${CONTRACT_CHECKS.map(([key, label]) => `<button class="check-item ${contract.checklist[key] ? "checked" : ""}" data-action="contract-check" data-code="${escapeHtml(contract.code)}" data-field="${key}" ${contractCheckError(contract, key) ? "disabled" : ""}>
     <span class="check-box">${icon("check")}</span>
     <span>${escapeHtml(label)}${key === "scan" ? `<span class="check-note">Bắt buộc trước khi chuyển sang Đã ký</span>` : ""}</span>
   </button>`).join("")}</div>`;
@@ -786,7 +808,7 @@ function viewContractDetail(code) {
   const remaining = Math.max(0, contract.value - contract.paid);
   const paidPercent = contract.value ? Math.round((contract.paid / contract.value) * 100) : 0;
   const totalQty = contract.lines.reduce((sum, line) => sum + line.qty, 0);
-  const delivered = contract.shipments.filter((shipment) => shipment.status === "delivered").reduce((sum, shipment) => sum + shipment.items.reduce((inner, item) => inner + item.qty, 0), 0);
+  const delivered = contract.lines.reduce((sum, line) => sum + Math.min(line.qty, deliveredContractQty(contract, line.sku)), 0);
   const deliveryPercent = totalQty ? Math.round((delivered / totalQty) * 100) : 0;
   const activeTab = state.ui.contractTab;
   const tabs = [
@@ -854,7 +876,7 @@ function viewContractDetail(code) {
                   title: "Checklist ký kết",
                   subtitle: ["pending_sign", "checking"].includes(contract.status) ? "Từng vai trò xác nhận bước thuộc thẩm quyền" : "Đã hoàn tất",
                   iconName: "shield",
-                  body: checklistHtml(contract) + (contract.status === "pending_sign" ? `<button class="btn btn-secondary btn-block mt-12" data-action="upload-scan" data-code="${escapeHtml(contract.code)}">${icon("upload")} Tải bản scan hợp đồng</button>` : "")
+                  body: checklistHtml(contract) + (contract.status === "pending_sign" ? `<button class="btn btn-secondary btn-block mt-12" data-action="upload-scan" data-code="${escapeHtml(contract.code)}" ${contractCheckError(contract, "scan") ? "disabled" : ""}>${icon("upload")} Tải bản scan hợp đồng</button>` : "")
                 })}
                 ${contract.status === "pending_sign" ? `<div class="banner warning">${icon("alert")}<div><strong>Chưa thể thực hiện giao hàng.</strong> Hợp đồng cần đủ chữ ký và bản scan trước khi chuyển sang trạng thái Đang thực hiện.</div></div>` : ""}
               </div>
@@ -869,7 +891,7 @@ function viewContractDetail(code) {
       <button class="btn btn-secondary" data-action="print-contract" data-code="${escapeHtml(contract.code)}">${icon("printer")} In hợp đồng</button>
       ${contract.status === "active" ? `<button class="btn btn-primary" data-action="create-wholesale-order" data-code="${escapeHtml(contract.code)}">${icon("cart")}${state.orders.some((order) => order.contract === contract.code) ? "Mở đơn thực hiện" : "Tạo đơn thực hiện"}</button>` : ""}
       <button class="btn btn-secondary" data-action="open-payment" data-record="${escapeHtml(contract.code)}" ${contract.status === "pending_sign" ? "disabled" : ""}>${icon("card")} Ghi nhận thanh toán</button>
-      <button class="btn ${contract.status === "active" ? "btn-primary" : "btn-ghost"}" data-action="liquidate-contract" data-code="${escapeHtml(contract.code)}" ${contract.status !== "active" ? "disabled" : ""}>${icon("check-circle")} Thanh lý</button>`
+      <button class="btn ${contract.status === "active" ? "btn-primary" : "btn-ghost"}" data-action="liquidate-contract" data-code="${escapeHtml(contract.code)}" ${canLiquidateContract(contract) ? "" : "disabled"}>${icon("check-circle")} Thanh lý</button>`
   })}
   <div class="card mb-16"><div style="padding:14px 16px"><div class="trace">
     <div class="trace-step done"><span class="t-label">Báo giá</span><span class="t-code">${escapeHtml(contract.quote || "—")}</span><span class="t-status">Đã duyệt</span></div>

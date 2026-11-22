@@ -7,14 +7,16 @@ import { ApiError, createRouter, json, preflight, readJsonBody } from "./src/htt
 import { Store } from "./src/store/store.js";
 import { seedState } from "./src/store/seed.js";
 import { resolveSession } from "./src/auth/auth.js";
+import { createRecoveryMailer } from "./src/auth/recovery-mail.js";
 import { registerRoutes } from "./src/routes.js";
 
 export function createApp(dataDir = config.dataDir, options = {}) {
   if (!Number.isFinite(config.sessionTtlMinutes) || config.sessionTtlMinutes <= 0) throw new Error("SESSION_TTL_MINUTES phải là số dương.");
+  const recoveryMailer = options.recoveryMailer === undefined ? createRecoveryMailer() : options.recoveryMailer;
   const store = new Store(dataDir, seedState);
   store.load();
   const router = createRouter();
-  registerRoutes(router, store);
+  registerRoutes(router, store, recoveryMailer);
 
   const server = http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
@@ -65,7 +67,7 @@ export function createApp(dataDir = config.dataDir, options = {}) {
       if (!matched) throw new ApiError(404, "not_found", `Không tìm thấy đường dẫn ${ctx.pathname}.`);
       ctx.params = matched.params;
       ctx.pattern = matched.pattern;
-      if (!["GET", "HEAD"].includes(req.method)) ctx.body = await readJsonBody(req, config.bodyLimitBytes);
+      if (!["GET", "HEAD"].includes(req.method)) ctx.body = await readJsonBody(req, matched.pattern === "/api/workspace" ? config.workspaceLimitBytes : config.bodyLimitBytes);
       const payload = await matched.handler(ctx);
       if (ctx.pathname !== "/api/health" && !store.hasRequestEvents(requestId)) {
         store.transact({ actor: ctx.actor, action: ["GET", "HEAD"].includes(req.method) ? "http.read" : "http.request", requestId, method: req.method, route: ctx.pattern, status: 200, ip: ctx.ip, userAgent: ctx.userAgent, durationMs: Date.now() - startedAt }, (tx) => tx.note(`Đã thực hiện ${req.method} ${ctx.pattern}.`));

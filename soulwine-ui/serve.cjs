@@ -11,7 +11,7 @@ const files = new Map([
   ["/assets/soulwine-hero.jpg", ["assets/soulwine-hero.jpg", "image/jpeg"]],
   ["/sample-data.js", ["../soulwine-shared/sample-data.cjs", "text/javascript"]],
   ["/soulwine-shared/sample-data.cjs", ["../soulwine-shared/sample-data.cjs", "text/javascript"]],
-  ...["data.js", "ui.js", "views.js", "workflows.js", "workspace.js", "management.js", "auth.js", "sample-loader.js", "app.js"].map((file) => [`/${file}`, [file, "text/javascript"]])
+  ...["data.js", "server-sync.js", "ui.js", "views.js", "workflows.js", "workspace.js", "management.js", "auth.js", "sample-loader.js", "app.js"].map((file) => [`/${file}`, [file, "text/javascript"]])
 ]);
 
 const server = http.createServer((request, response) => {

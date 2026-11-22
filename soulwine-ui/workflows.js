@@ -7,11 +7,15 @@ const ACTION_ROLES = {
   "add-line": ["director", "sales_manager", "sales_staff"],
   "remove-line": ["director", "sales_manager", "sales_staff"],
   "new-order": ["sales_manager", "sales_staff"],
+  "edit-order": ["sales_manager", "sales_staff"],
+  "cancel-order": ["sales_manager", "sales_staff"],
   "new-customer": ["director", "sales_manager", "sales_staff"],
   "open-payment": ["accountant", "sales_staff"],
   "open-invoice": ["accountant"],
   "open-reserve": ["warehouse_manager"],
   "release-reservation": ["warehouse_manager"],
+  "request-issue": ["sales_manager", "sales_staff"],
+  "cancel-issue-request": ["sales_manager", "sales_staff", "warehouse_manager"],
   "issue-order": ["warehouse_manager"],
   "confirm-receipt": ["warehouse_manager"],
   "return-receipt": ["warehouse_manager"],
@@ -22,8 +26,10 @@ const ACTION_ROLES = {
   "request-recount": ["warehouse_manager"],
   "open-adjustment": ["warehouse_manager"],
   "complete-stocktake": ["warehouse_manager"],
+  "cancel-stocktake": ["warehouse_manager"],
   "report-stocktake": ["warehouse_manager"],
   "new-user": ["director"],
+  "configure-permissions": ["director"],
   "toggle-user": ["director"],
   "toggle-product": ["director", "sales_manager"],
   "new-contract": ["sales_manager", "sales_staff"],
@@ -31,12 +37,61 @@ const ACTION_ROLES = {
   "upload-scan": ["accountant", "sales_manager"],
   "liquidate-contract": ["director", "sales_manager"]
 };
+Object.assign(ACTION_ROLES, {
+  "delivery-result": ["sales_staff", "sales_manager", "warehouse_manager"],
+  "new-undelivered-return": ["warehouse_staff", "warehouse_manager"],
+  "return-receive": ["warehouse_staff", "warehouse_manager"],
+  "return-inspection": ["warehouse_manager"],
+  "return-finance-evidence": ["accountant"],
+  "return-replacement-evidence": ["warehouse_manager"]
+});
+
+const CONFIGURABLE_ACTIONS = [
+  ["Lập và sửa báo giá", "new-quote", ["new-quote", "save-quote", "submit-quote", "duplicate-quote", "add-line", "remove-line"]],
+  ["Tạo / sửa / hủy đơn hàng", "new-order", ["new-order", "edit-order", "cancel-order", "create-wholesale-order"]],
+  ["Ghi nhận thanh toán", "open-payment", ["open-payment"]],
+  ["Xác nhận giữ hàng", "open-reserve", ["open-reserve", "release-reservation"]],
+  ["Yêu cầu xuất kho", "request-issue", ["request-issue"]],
+  ["Xác nhận xuất kho", "issue-order", ["issue-order"]],
+  ["Xác nhận nhập kho", "confirm-receipt", ["confirm-receipt", "return-receipt"]],
+  ["Lập yêu cầu mua", "new-purchase-request", ["new-purchase-request"]],
+  ["Hoàn tất kiểm kê", "complete-stocktake", ["complete-stocktake"]]
+];
+
+function actionRoles(action) {
+  const base = ACTION_ROLES[action];
+  const group = CONFIGURABLE_ACTIONS.find((entry) => entry[2].includes(action));
+  const restriction = group && state.settings.actionRoles?.[group[1]];
+  return base && Array.isArray(restriction) ? base.filter((role) => restriction.includes(role)) : base;
+}
+
+function showPermissionSettings() {
+  const controls = CONFIGURABLE_ACTIONS.map(([label, key]) => `<fieldset class="field mb-16"><legend>${escapeHtml(label)}</legend>${ACTION_ROLES[key].map((role) => `<label class="checkline"><input type="checkbox" name="${key}" value="${role}" ${actionRoles(key).includes(role) ? "checked" : ""}> ${escapeHtml(ROLES[role].label)}</label>`).join("")}</fieldset>`).join("");
+  showForm("Điều chỉnh quyền thao tác", `<p class="hint mb-16">Chỉ bật lại hoặc giới hạn các quyền trong phạm vi vai trò chuẩn. Không cấp quyền cho vai trò ngoài ma trận mặc định.</p>${controls}${inputField("reason", "Lý do thay đổi", "text", "", "required maxlength=240")}`, (data) => {
+    if (!guardAction("configure-permissions")) return;
+    const reason = data.get("reason").trim();
+    if (!reason) return formError("Cần nhập lý do thay đổi quyền.");
+    const next = {}, changes = [];
+    for (const [label, key] of CONFIGURABLE_ACTIONS) {
+      const previous = actionRoles(key);
+      const requested = data.getAll(key);
+      const allowed = ACTION_ROLES[key].filter((role) => requested.includes(role));
+      if (allowed.length !== ACTION_ROLES[key].length) next[key] = allowed;
+      if (previous.join() !== allowed.join()) changes.push(`${label}: ${previous.map((role) => ROLES[role].label).join(", ") || "Không cấp"} → ${allowed.map((role) => ROLES[role].label).join(", ") || "Không cấp"}`);
+    }
+    if (changes.length) {
+      state.settings.actionRoles = next;
+      addAudit("Cập nhật quyền vai trò", "Ma trận quyền", `${reason} · ${changes.join("; ")}`);
+    }
+    closeDialog(); render(true); toast(changes.length ? "Đã lưu ma trận quyền trên thiết bị." : "Không có quyền nào thay đổi.");
+  });
+}
 
 function guardAction(action) {
-  const roles = ACTION_ROLES[action];
+  const roles = actionRoles(action);
   if (roles && workspaceStatus.conflict && !["restore-backup", "clear-workspace"].includes(action)) { toast("Có dữ liệu mới ở cửa sổ khác. Tải dữ liệu mới trước khi tiếp tục thay đổi.", "warning"); return false; }
   if (roles && !roles.includes(state.role)) {
-    toast(`Thao tác thuộc quyền ${roles.map((role) => ROLES[role].label).join(" / ")}. Kiểm tra vai trò đang sử dụng.`, "warning");
+    toast(roles.length ? `Thao tác thuộc quyền ${roles.map((role) => ROLES[role].label).join(" / ")}. Kiểm tra vai trò đang sử dụng.` : "Thao tác đã bị tắt trong ma trận quyền.", "warning");
     return false;
   }
   return true;
@@ -90,7 +145,8 @@ function quoteEditable(quote) {
 
 function lockQuoteEditor() {
   const quote = currentQuote();
-  if (!quote || quoteEditable(quote)) return;
+  if (!quote) return;
+  if (quoteEditable(quote)) return refreshQuoteTotals();
   viewElement.querySelectorAll("[data-qfield],[data-qmeta],[data-qcheck],[data-action=save-quote],[data-action=add-line],[data-action=remove-line]").forEach((element) => {
     element.disabled = true;
     element.title = "Báo giá đã gửi duyệt / đã duyệt được giữ nguyên. Nhân bản để tạo phiên bản mới.";
@@ -114,50 +170,110 @@ function createQuote(source, replace = false) {
   quote.approvalId = null;
   quote.isNew = true;
   quote.createdBy = state.activeUserId;
-  if (source) { quote.version += 1; quote.sourceQuote = source.code; quote.confirmed = false; }
+  if (source) { quote.version += 1; quote.sourceQuote = source.code; quote.confirmed = false; quote.validUntil = validUntil.toLocaleDateString("en-GB", { timeZone: "Asia/Ho_Chi_Minh" }); }
   state.ui.draftQuote = quote;
   navigate("quotes/new");
 }
 
-function refreshQuoteTotals() {
-  const quote = currentQuote();
-  if (!quote) return;
+function quoteQtyValid(value) { return Number.isSafeInteger(value) && value > 0 && value <= 1000000000; }
+
+function validateQuoteInput(input, valid, message) {
+  if (input) {
+    input.setCustomValidity(valid ? "" : message);
+    input.classList.toggle("field-error", !valid);
+    numericFieldFeedback(input, valid, message);
+  }
+  return valid;
+}
+
+function validateQuoteDiscount(input, discount, basis) {
+  const fixed = discount.mode === "fixed";
+  if (input) {
+    input.max = fixed ? basis : 100;
+    input.step = fixed ? "1" : "any";
+  }
+  const value = input ? input.valueAsNumber : discount.value;
+  const valid = quoteDiscountValid({ ...discount, value }, basis);
+  return validateQuoteInput(input, valid, fixed ? `Nhập số VND nguyên từ 0 đến ${money(basis)}.` : "Nhập tỷ lệ từ 0 đến 100%.");
+}
+
+function refreshQuoteTotals(quote = currentQuote()) {
   const totals = quoteTotals(quote);
-  const values = { "q-subtotal": money(totals.subtotal), "q-discount": `-${money(totals.discount)}`, "q-total": money(totals.total) };
-  Object.entries(values).forEach(([id, value]) => { const element = document.getElementById(id); if (element) element.textContent = value; });
-  quote.lines.forEach((line) => {
-    const element = document.querySelector(`[data-line-total="${line.sku}"]`);
-    if (element) element.textContent = money(quoteLineTotal(line));
-    const stock = document.querySelector(`[data-stock-badge="${line.sku}"]`);
+  let validLines = true;
+  for (const line of quote.lines) {
+    const sku = CSS.escape(line.sku);
+    const qty = viewElement.querySelector(`[data-qfield="qty"][data-sku="${sku}"]`);
+    const discount = viewElement.querySelector(`[data-qfield="discount"][data-sku="${sku}"]`);
+    const amounts = quoteLineTotals(line);
+    const validQty = validateQuoteInput(qty, quoteQtyValid(qty ? qty.valueAsNumber : line.qty) && Number.isSafeInteger(amounts.subtotal), "Nhập số lượng nguyên dương sao cho giá trị dòng hợp lệ.");
+    const validDiscount = validateQuoteDiscount(discount, quoteLineDiscount(line), amounts.subtotal);
+    const validLine = validQty && validDiscount && Number.isSafeInteger(amounts.price) && amounts.price >= 0;
+    validLines = validLines && validLine;
+    const element = viewElement.querySelector(`[data-line-total="${sku}"]`);
+    if (element) element.textContent = validLine ? money(amounts.total) : "—";
+    const stock = viewElement.querySelector(`[data-stock-badge="${sku}"]`);
     if (stock) stock.innerHTML = quoteStockBadge(line);
-  });
+  }
+  validLines = validLines && Number.isSafeInteger(totals.subtotal);
+  const wholeInput = viewElement.querySelector('[data-qfield="discount"]:not([data-sku])');
+  const validWhole = validateQuoteDiscount(wholeInput, quoteWholeDiscount(quote), totals.afterLines);
+  const valid = validLines && validWhole;
+  const values = {
+    "q-subtotal": validLines ? money(totals.subtotal) : "—",
+    "q-line-discount": validLines ? discountMoney(totals.lineDiscount) : "—",
+    "q-after-lines": validLines ? money(totals.afterLines) : "—",
+    "q-whole-discount": valid ? discountMoney(totals.wholeDiscount) : "—",
+    "q-discount": valid ? discountMoney(totals.discount) : "—",
+    "q-total": valid ? money(totals.total) : "—"
+  };
+  Object.entries(values).forEach(([id, value]) => { const element = document.getElementById(id); if (element) element.textContent = value; });
+  return valid;
 }
 
 function updateQuoteLine(input) {
   const quote = currentQuote();
   if (!quoteEditable(quote)) return;
-  const line = quote.lines.find((item) => item.sku === input.dataset.sku);
-  const value = Number(input.value);
-  const valid = input.value !== "" && Number.isFinite(value) && (input.dataset.qfield === "qty" ? Number.isSafeInteger(value) && value > 0 && value <= 1000000000 : value >= 0 && value <= 100);
-  input.setCustomValidity(valid ? "" : "Nhập số hợp lệ; số lượng nguyên dương, chiết khấu từ 0 đến 100%.");
-  input.classList.toggle("field-error", !valid);
-  numericFieldFeedback(input, valid, input.dataset.qfield === "qty" ? "Nhập số lượng nguyên dương." : "Chiết khấu cần từ 0 đến 100%.");
-  if (!valid) return;
-  line[input.dataset.qfield] = value;
-  refreshQuoteTotals();
+  const { qfield, sku } = input.dataset;
+  const line = sku && quote.lines.find((item) => item.sku === sku);
+  if (sku && !line) return;
+  if (qfield === "qty") {
+    if (line && quoteQtyValid(input.valueAsNumber)) line.qty = input.valueAsNumber;
+  } else {
+    const switching = qfield === "discountMode";
+    const mode = switching ? input.value : (line ? quoteLineDiscount(line) : quoteWholeDiscount(quote)).mode;
+    const value = switching ? 0 : input.valueAsNumber;
+    if (Number.isFinite(value) && value >= 0 && (mode !== "fixed" || Number.isSafeInteger(value))) {
+      if (!line) quote.quoteDiscount = { mode, value };
+      else if (mode === "fixed") { line.discountAmount = value; delete line.discount; }
+      else { line.discount = value; delete line.discountAmount; }
+    }
+    // Changing the unit starts a new amount instead of treating VND as a percentage or vice versa.
+    if (switching) input.parentElement.querySelector('[data-qfield="discount"]').value = "0";
+  }
+  refreshQuoteTotals(quote);
   scheduleWorkspaceSave();
+}
+
+function snapshotQuoteLine(line) {
+  const { price, subtotal, discount } = quoteLineTotals(line);
+  // Existing approval and sales views read a percentage; also retain the exact fixed amount.
+  return { ...line, price, discount: line.discountAmount === undefined ? line.discount ?? 0 : subtotal ? (discount / subtotal) * 100 : 0 };
 }
 
 function saveQuote(submit = false) {
   const quote = currentQuote();
   if (!quoteEditable(quote)) return toast("Báo giá hiện chỉ được xem. Nhân bản để chỉnh sửa.", "warning");
-  const invalid = viewElement.querySelector("input:invalid");
+  const valid = refreshQuoteTotals(quote);
+  const invalid = viewElement.querySelector("[data-qfield]:invalid");
   if (invalid) { invalid.reportValidity(); return; }
   if (!quote.lines.length) return toast("Thêm ít nhất một sản phẩm trước khi lưu báo giá.", "warning");
+  if (!valid) return toast("Kiểm tra số lượng, đơn giá và chiết khấu trước khi lưu báo giá.", "warning");
+  if (submit && quote.lines.some((line) => productBySku(line.sku)?.status !== "product_active")) return toast("Loại bỏ sản phẩm đã ngừng kinh doanh trước khi gửi duyệt.", "warning");
   if (!/^(0[1-9]|[12]\d|3[01])\/(0[1-9]|1[0-2])\/\d{4}$/.test(quote.validUntil)) return toast("Ngày hiệu lực cần có định dạng dd/MM/yyyy.", "warning");
   const parsedDate = new Date(`${isoDate(quote.validUntil)}T12:00:00Z`);
   if (!Number.isFinite(parsedDate.valueOf()) || parsedDate.toISOString().slice(0, 10) !== isoDate(quote.validUntil)) return toast("Ngày hiệu lực không tồn tại trong lịch.", "warning");
   if (submit && isoDate(quote.validUntil) < isoDate(todayText())) return toast("Không gửi duyệt báo giá đã hết hiệu lực.", "warning");
+  for (const line of quote.lines) line.price ??= quoteLineTotals(line).price;
   if (quote.isNew) {
     quote.isNew = false;
     state.quotes.unshift(quote);
@@ -166,12 +282,19 @@ function saveQuote(submit = false) {
   if (state.ui.draftQuote?.code === quote.code) state.ui.draftQuote = null;
   if (submit) {
     quote.status = "pending";
+    const totals = quoteTotals(quote);
+    const whole = quoteWholeDiscount(quote);
+    const lineProposals = quote.lines.filter((line) => quoteLineDiscount(line).value).map((line) => `${line.sku}: ${quoteDiscountLabel(quoteLineDiscount(line))}`);
+    const summary = [quote.note || "Đề nghị xem xét giá và chiết khấu cho báo giá."];
+    if (lineProposals.length) summary.push(`Chiết khấu đề xuất theo dòng: ${lineProposals.join("; ")}.`);
+    if (quote.lines.some((line) => line.discountAmount > 0)) summary.push("Tỷ lệ trong bảng là tỷ lệ quy đổi đối với dòng chiết khấu bằng VND.");
+    if (whole.value) summary.push(`Chiết khấu toàn báo giá: ${quoteDiscountLabel(whole)} trên ${money(totals.afterLines)} sau chiết khấu dòng (giảm ${money(totals.wholeDiscount)}).`);
     const approval = {
       id: nextCode(state.approvals, "id", "AP-", 3), type: "discount", ref: quote.code,
       title: "Chiết khấu bán sỉ", assignee: "director", status: "pending", createdAt: nowStamp(), age: "Vừa gửi",
-      requester: currentUser().name, amount: quoteTotals(quote).total,
-      summary: quote.note || "Đề nghị xem xét giá và chiết khấu cho báo giá.",
-      lines: JSON.parse(JSON.stringify(quote.lines)), evidence: [`${quote.code} v${quote.version}`]
+      requester: currentUser().name, amount: totals.total,
+      summary: summary.join(" "), quoteDiscount: { ...whole },
+      lines: quote.lines.map(snapshotQuoteLine), evidence: [`${quote.code} v${quote.version}`]
     };
     quote.approvalId = approval.id;
     state.approvals.unshift(approval);
@@ -187,21 +310,68 @@ function showProductPicker() {
   showDialog({ title: "Thêm sản phẩm vào báo giá", body: `<div class="product-picker">${state.products.filter((product) => product.status === "product_active").map((product) => `<button class="picker-row" data-action="pick-product" data-sku="${product.sku}">${productCell(product.sku)}<span class="num">${money(product.wholesale)}</span>${icon("plus")}</button>`).join("")}</div>` });
 }
 
+function customerShippingAddresses(customer) {
+  const saved = customer?.type === "Bán sỉ" && Array.isArray(customer.shippingAddresses) ? customer.shippingAddresses : [];
+  const addresses = [...new Set(saved.filter((address) => typeof address === "string").map((address) => address.trim()).filter(Boolean))];
+  const legacy = typeof customer?.address === "string" ? customer.address.trim() : "";
+  return addresses.length ? addresses : legacy ? [legacy] : [];
+}
+
+function shippingAddressFields(customer, current, label = "Địa chỉ nhận hàng") {
+  const addresses = customerShippingAddresses(customer);
+  const address = current?.trim() || addresses[0] || "";
+  const manual = inputField("address", customer?.type === "Bán sỉ" && addresses.length ? "Địa chỉ khác" : label, "text", address, "required maxlength=240");
+  if (customer?.type !== "Bán sỉ" || !addresses.length) return manual;
+  return `${selectField("savedAddress", label, [...addresses.map((item, index) => [item, index === 0 ? `${item} (mặc định)` : item]), ["", "Nhập địa chỉ khác"]], addresses.includes(address) ? address : "")}<div id="manual-shipping-address">${manual}</div>`;
+}
+
+function updateShippingAddressField() {
+  const form = document.getElementById("action-form");
+  if (!form?.elements.savedAddress) return;
+  const useSaved = !!form.elements.savedAddress.value;
+  form.elements.address.disabled = useSaved;
+  form.querySelector("#manual-shipping-address").classList.toggle("hidden", useSaved);
+}
+
+function selectedShippingAddress(data, customer) {
+  const saved = data.get("savedAddress");
+  if (saved) return customerShippingAddresses(customer).includes(saved) ? saved : "";
+  const manual = (data.get("address") || "").trim();
+  return manual.length <= 240 ? manual : "";
+}
+
 function showCustomerForm(id) {
   const existing = id ? customerById(id) : null;
   const value = (name) => existing?.[name] || "";
-  showForm(existing ? "Chỉnh sửa khách hàng" : "Thêm khách hàng", `<div class="form-grid">${inputField("name", "Tên cá nhân / doanh nghiệp", "text", value("name"), "required maxlength=120")}${selectField("type", "Nhóm khách hàng", [["Bán sỉ", "Khách sỉ / doanh nghiệp"], ["Bán lẻ", "Khách lẻ / cá nhân"]], value("type"))}${inputField("phone", "Số điện thoại", "tel", value("phone"), "required minlength=8 maxlength=20")}${inputField("email", "Email", "email", value("email"))}${inputField("tax", "Mã số thuế (nếu có)", "text", value("tax"))}${inputField("address", "Địa chỉ giao hàng", "text", value("address"), "required")}</div>`, (data) => {
+  const [primary = "", ...additional] = customerShippingAddresses(existing);
+  showForm(existing ? "Chỉnh sửa khách hàng" : "Thêm khách hàng", `<div class="form-grid">${inputField("name", "Tên cá nhân / doanh nghiệp", "text", value("name"), "required maxlength=120")}${selectField("type", "Nhóm khách hàng", [["Bán sỉ", "Khách sỉ / doanh nghiệp"], ["Bán lẻ", "Khách lẻ / cá nhân"]], value("type"))}${inputField("phone", "Số điện thoại", "tel", value("phone"), "required minlength=8 maxlength=20")}${inputField("email", "Email", "email", value("email"))}${inputField("tax", "Mã số thuế (nếu có)", "text", value("tax"))}${inputField("invoiceAddress", "Địa chỉ xuất hóa đơn (nếu có)", "text", value("invoiceAddress"))}</div>
+    ${inputField("address", "Địa chỉ giao hàng mặc định", "text", primary, "required maxlength=240")}
+    <div id="additional-shipping-addresses">${field("additionalAddresses", "Địa chỉ giao hàng bổ sung", `<textarea class="textarea" id="form-additionalAddresses" name="additionalAddresses" rows="3">${escapeHtml(additional.join("\n"))}</textarea>`, "Mỗi địa chỉ một dòng. Có thể chọn lại khi tạo đơn hoặc bàn giao vận chuyển.")}</div>
+    ${additional.length ? '<p id="retail-shipping-note" class="hint hidden">Khách lẻ chỉ giữ địa chỉ giao hàng mặc định khi lưu.</p>' : ""}`, (data) => {
     const phone = String(data.get("phone")).replace(/\D/g, "");
     if (phone.length < 8 || phone.length > 15) return formError("Số điện thoại cần từ 8 đến 15 chữ số.");
     if (state.customers.some((customer) => customer.id !== id && customer.phone.replace(/\D/g, "") === phone)) return formError("Số điện thoại đã thuộc hồ sơ khác. Kiểm tra để tránh tạo trùng.");
     const name = data.get("name").trim();
     if (!name) return formError("Nhập tên khách hàng.");
-    const fields = { name, contact: name, type: data.get("type"), kind: data.get("type") === "Bán sỉ" ? "business" : "individual", phone: data.get("phone"), email: data.get("email"), tax: data.get("tax"), address: data.get("address"), invoiceAddress: data.get("address") };
+    const type = data.get("type");
+    const address = data.get("address").trim();
+    const extras = type === "Bán sỉ" ? (data.get("additionalAddresses") || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean) : [];
+    const shippingAddresses = [address, ...extras];
+    if (!address || shippingAddresses.some((item) => item.length > 240)) return formError("Nhập địa chỉ giao hàng mặc định; mỗi địa chỉ tối đa 240 ký tự.");
+    if (new Set(shippingAddresses.map((item) => item.toLocaleLowerCase("vi"))).size !== shippingAddresses.length) return formError("Danh sách địa chỉ giao hàng không được trùng.");
+    const fields = { name, contact: name, type, kind: type === "Bán sỉ" ? "business" : "individual", phone: data.get("phone"), email: data.get("email"), tax: data.get("tax"), address, shippingAddresses, invoiceAddress: data.get("invoiceAddress").trim() };
     if (existing) Object.assign(existing, fields);
     else state.customers.unshift({ id: nextCode(state.customers, "id", "KH-", 3), ...fields, ar: 0, orders: 0, note: "" });
     addAudit(existing ? "Cập nhật khách hàng" : "Tạo khách hàng", name, data.get("phone"));
     closeDialog(); render(true); toast("Đã lưu hồ sơ khách hàng.");
-  });
+  }, { input: () => {
+    const form = document.getElementById("action-form");
+    if (!form?.elements.additionalAddresses) return;
+    const wholesale = form.elements.type.value === "Bán sỉ";
+    form.elements.additionalAddresses.disabled = !wholesale;
+    form.querySelector("#additional-shipping-addresses").classList.toggle("hidden", !wholesale);
+    form.querySelector("#retail-shipping-note")?.classList.toggle("hidden", wholesale);
+  } });
 }
 
 function canonicalPaymentRecord(code) {
@@ -216,7 +386,7 @@ function remainingOf(record) {
 function applyPayment(payment) {
   if (payment.status === "confirmed") return;
   const record = canonicalPaymentRecord(payment.record);
-  if (!record || payment.amount > remainingOf(record)) throw new Error("Số tiền vượt phần còn phải thu hoặc hồ sơ không tồn tại.");
+  if (!record || record.status === "cancelled" || payment.amount > remainingOf(record)) throw new Error("Hồ sơ đã hủy, không tồn tại hoặc số tiền vượt phần còn phải thu.");
   record.paid += payment.amount;
   payment.status = "confirmed";
   payment.confirmedBy = currentUser().name;
@@ -227,7 +397,7 @@ function applyPayment(payment) {
       order.paid = record.paid;
       if (order.status === "pending_payment" && orderEligible(order)) order.status = "eligible";
       if (orderEligible(order)) order.eligibleAt ||= new Date().toISOString();
-      if (order.status === "overdue" && order.paid >= order.total) order.status = order.lines.every((line) => line.shipped >= line.qty) ? "completed" : "holding";
+      syncIssueReadiness(order);
     }
   });
   syncCustomerBalances();
@@ -290,11 +460,22 @@ function decideApproval(id, approve, confirmed = false, savedReason = "") {
   }
   if (approval.type === "discount") {
     const quote = quoteByCode(approval.ref);
+    if (approve && quote && quoteIsExpired(quote)) return toast("Báo giá đã hết hiệu lực. Tạo phiên bản mới trước khi phê duyệt.", "warning");
     if (quote) quote.status = approve ? "approved" : "rejected";
   }
   if (approval.type === "purchase") {
     const request = state.purchaseRequests.find((item) => item.code === approval.ref);
-    if (request) { request.approvals ||= { accountant: false, director: false }; request.approvals[state.role] = approve; request.status = !approve ? "rejected" : Object.values(request.approvals).every(Boolean) ? "approved" : "pending"; }
+    if (!request || request.status !== "pending") return toast("Yêu cầu mua không còn chờ xử lý.", "warning");
+    request.approvals ||= { accountant: false, director: false };
+    request.approvals[state.role] = approve;
+    request.status = !approve ? "rejected" : request.approvals.accountant && request.approvals.director ? "approved" : "pending";
+    if (!approve) {
+      state.approvals.filter((item) => item !== approval && item.type === "purchase" && item.ref === request.code && item.status === "pending").forEach((item) => {
+        item.status = "cancelled";
+        item.decidedAt = nowStamp();
+        item.decisionNote = "Đóng bước chờ vì yêu cầu mua đã bị từ chối.";
+      });
+    }
   }
   if (!approve && approval.type === "payment") {
     const payment = state.payments.find((item) => item.id === approval.ref);
@@ -318,6 +499,9 @@ function showReservationForm(sku) {
     const line = order?.lines.find((item) => item.sku === product?.sku);
     const qty = Number(data.get("qty"));
     if (!order || !product || !line) return formError("Sản phẩm không thuộc đơn này. Chọn đúng SKU đã đặt.");
+    const lock = stockLock(product.sku);
+    if (lock) return formError(`SKU ${product.sku} đang khóa theo kỳ ${lock.code}.`);
+    if (["completed", "cancelled", "failed", "overdue"].includes(order.status) || product.status !== "product_active") return formError("Đơn hoặc sản phẩm không còn được phân bổ hàng.");
     if (!orderEligible(order)) return formError(orderEligibilityReason(order));
     const contract = order.contract && contractByCode(order.contract);
     if (contract && !["active", "signed"].includes(contract.status)) return formError("Hợp đồng chưa hoàn tất ký kết.");
@@ -325,9 +509,9 @@ function showReservationForm(sku) {
     if (qty > availableOf(product)) return formError(`Không thể giữ ${qty}: tồn khả dụng chỉ còn ${availableOf(product)} ${product.unit.toLowerCase()}.`);
     if (qty > line.qty - line.shipped - line.held) return formError("Số lượng giữ vượt phần chưa giao, chưa giữ của đơn.");
     product.held += qty; line.held += qty; order.status = "holding";
-    order.readyForIssueAt ||= new Date().toISOString();
     const expiryDate = new Date(); expiryDate.setDate(expiryDate.getDate() + (state.settings.rules.holdDays || 0));
     state.reservations.unshift({ id: nextCode(state.reservations, "id", `GR-${new Date().getFullYear()}-`), order: order.code, customerId: order.customerId, sku: product.sku, qty, since: todayText(), expiry: state.settings.rules.holdDays ? expiryDate.toLocaleDateString("en-GB") : "", status: "holding", note: data.get("note") });
+    syncIssueReadiness(order);
     addMovement("Giữ hàng", product.sku, qty, product.physical, product.held, order.code, data.get("note"));
     addAudit("Xác nhận giữ hàng", order.code, `${product.sku} · ${qty} ${product.unit}`, "success");
     closeDialog(); render(true); toast("Đã giữ hàng. Tồn vật lý không thay đổi.");
@@ -337,21 +521,29 @@ function showReservationForm(sku) {
     const product = productBySku(form.elements.sku.value);
     const order = orderByCode(form.elements.order.value);
     const preview = document.getElementById("reserve-preview");
-    preview.textContent = `${orderEligibilityReason(order)}. Tồn khả dụng: ${availableOf(product)} ${product.unit.toLowerCase()} · Sau giữ: ${availableOf(product) - Number(form.elements.qty.value || 0)}.`;
-    preview.className = `banner ${orderEligible(order) && Number(form.elements.qty.value) <= availableOf(product) ? "info" : "warning"} mt-16`;
+    const lock = stockLock(product.sku);
+    preview.textContent = lock ? `SKU ${product.sku} đang khóa theo kỳ ${lock.code}.` : `${orderEligibilityReason(order)}. Tồn khả dụng: ${availableOf(product)} ${product.unit.toLowerCase()} · Sau giữ: ${availableOf(product) - Number(form.elements.qty.value || 0)}.`;
+    preview.className = `banner ${!lock && orderEligible(order) && Number(form.elements.qty.value) <= availableOf(product) ? "info" : "warning"} mt-16`;
   } });
 }
 
 function releaseReservation(id) {
   const reservation = state.reservations.find((item) => item.id === id);
   if (!reservation || reservation.status !== "holding") return toast("Bản ghi không còn giữ hàng.", "info");
+  const lock = stockLock(reservation.sku);
+  if (lock) return toast(`SKU ${reservation.sku} đang khóa theo kỳ ${lock.code}.`, "warning");
   showForm("Nhả giữ hàng", `${inputField("reason", "Lý do nhả giữ", "text", "", "required maxlength=200")}<div class="banner warning mt-16">Giải phóng ${reservation.qty} đơn vị cho ${escapeHtml(reservation.order)}; không thay đổi tồn vật lý.</div>`, (data) => {
     if (!data.get("reason").trim()) return formError("Cần nêu lý do nhả giữ.");
+    if (!guardAction("release-reservation") || reservation.status !== "holding") return formError("Bản ghi không còn giữ hàng.");
+    const currentLock = stockLock(reservation.sku);
+    if (currentLock) return formError(`SKU ${reservation.sku} đang khóa theo kỳ ${currentLock.code}.`);
     const product = productBySku(reservation.sku);
-    const line = orderByCode(reservation.order)?.lines.find((item) => item.sku === reservation.sku);
+    const order = orderByCode(reservation.order);
+    const line = order?.lines.find((item) => item.sku === reservation.sku);
     product.held -= reservation.qty;
     if (line) line.held -= reservation.qty;
     reservation.status = "released";
+    if (order) syncIssueReadiness(order);
     addMovement("Nhả giữ", reservation.sku, -reservation.qty, product.physical, product.held, reservation.order, data.get("reason"));
     addAudit("Nhả giữ hàng", reservation.id, data.get("reason"));
     closeDialog(); render(true); toast("Đã giải phóng lượng giữ.");
@@ -362,31 +554,170 @@ function showRetailOrderForm() {
   return showRetailCart();
 }
 
+function canChangeOrder(order) {
+  return order && ["draft", "pending_confirm", "pending_payment", "eligible", "holding"].includes(order.status) &&
+    order.lines.every((line) => !line.shipped) && !state.issues.some((issue) => issue.order === order.code);
+}
+
+function orderReleasePlan(order, quantities) {
+  const plan = [];
+  for (const [index, line] of order.lines.entries()) {
+    let left = line.held - quantities[index];
+    if (left <= 0) continue;
+    const product = productBySku(line.sku);
+    const active = state.reservations.filter((item) => item.order === order.code && item.sku === line.sku && item.status === "holding");
+    if (!product || product.held < line.held || active.reduce((sum, item) => sum + item.qty, 0) !== line.held) throw new Error(`Lượng giữ của ${line.sku} chưa khớp. Thủ kho cần đối chiếu trước khi đổi đơn.`);
+    for (const reservation of active) {
+      const qty = Math.min(left, reservation.qty);
+      plan.push({ reservation, product, line, qty });
+      left -= qty;
+      if (!left) break;
+    }
+  }
+  return plan;
+}
+
+function applyOrderRelease(plan, reason) {
+  for (const { reservation, product, line, qty } of plan) {
+    product.held -= qty;
+    line.held -= qty;
+    if (reservation.qty === qty) reservation.status = "released";
+    else {
+      reservation.qty -= qty;
+      state.reservations.unshift({ ...reservation, id: nextCode(state.reservations, "id", `GR-${new Date().getFullYear()}-`), qty, status: "released", note: reason });
+    }
+    addMovement("Nhả giữ", product.sku, -qty, product.physical, product.held, reservation.order, reason);
+  }
+}
+
+function showOrderChange(code, cancel = false) {
+  const action = cancel ? "cancel-order" : "edit-order";
+  const order = orderByCode(code);
+  if (!guardAction(action) || !canChangeOrder(order)) return;
+  const customer = customerById(order.customerId);
+  const addressFields = cancel ? "" : shippingAddressFields(customer, order.address);
+  const editableQty = !cancel && !order.contract;
+  const quantities = editableQty ? order.lines.map((line, index) => inputField(`qty-${index}`, productName(line.sku), "number", line.qty, "required min=1 step=1")).join("") : "";
+  const explanation = cancel ? "Hủy đơn sẽ nhả toàn bộ lượng giữ. Không tự hoàn tiền hoặc hủy hợp đồng liên quan." : order.contract ? "Số lượng đơn sỉ theo hợp đồng. Chỉ được đổi địa chỉ tại đây." : "Giảm lượng đặt sẽ nhả phần giữ thừa. Nếu đã thu vượt giá trị mới, phần chênh lệch được ghi nhận để Kế toán đối chiếu, không tự hoàn tiền.";
+  showForm(cancel ? "Hủy đơn hàng" : "Cập nhật đơn hàng", `${cancel ? "" : `<div class="form-grid">${addressFields}${quantities}</div>`}${inputField("reason", "Lý do", "text", "", "required maxlength=240")}<div class="banner warning mt-16">${explanation}</div>`, (data) => {
+    if (!guardAction(action) || !canChangeOrder(order)) return formError("Đơn không còn ở trạng thái được sửa hoặc hủy.");
+    const reason = data.get("reason").trim();
+    if (!reason) return formError("Cần nhập lý do.");
+    const next = order.lines.map((line, index) => cancel ? 0 : editableQty ? Number(data.get(`qty-${index}`)) : line.qty);
+    if (!cancel && next.some((qty, index) => !Number.isSafeInteger(qty) || qty < 1 || (qty > order.lines[index].qty && qty > (order.lines[index].held + availableOf(productBySku(order.lines[index].sku)))))) return formError("Số lượng không hợp lệ hoặc vượt tồn khả dụng.");
+    const address = cancel ? "" : selectedShippingAddress(data, customer);
+    if (!cancel && !address) return formError("Chọn hoặc nhập địa chỉ nhận hàng hợp lệ.");
+    const changedQty = editableQty && next.some((qty, index) => qty !== order.lines[index].qty);
+    const total = changedQty ? order.lines.reduce((sum, line, index) => sum + line.price * next[index], 0) : order.total;
+    const pending = state.payments.filter((item) => item.record === order.code && item.status === "pending_confirm").reduce((sum, item) => sum + item.amount, 0);
+    if (!order.contract && pending && (cancel || (changedQty && total < order.paid + pending))) return formError("Kế toán cần xử lý giao dịch đang chờ đối chiếu trước.");
+    if (changedQty && (!Number.isSafeInteger(total) || total <= 0)) return formError("Giá trị đơn mới không hợp lệ.");
+    if (changedQty && total > order.paid && order.lines.some((line) => line.held > 0)) return formError("Đơn đang giữ hàng. Không tăng giá trị đơn vượt số tiền đã xác nhận.");
+    const plan = orderReleasePlan(order, next);
+    const lock = stockLock(plan.map(({ product }) => product.sku));
+    if (lock) return formError(`Có SKU cần nhả giữ đang khóa theo kỳ ${lock.code}.`);
+    const previous = order.status;
+    applyOrderRelease(plan, reason);
+    if (cancel) {
+      order.status = "cancelled";
+      order.cancelReason = reason;
+    } else {
+      order.address = address;
+      if (changedQty) {
+        order.lines.forEach((line, index) => { line.qty = next[index]; });
+        order.total = total;
+      }
+      order.status = order.lines.some((line) => line.held > 0) ? "holding" : orderEligible(order) ? "eligible" : "pending_payment";
+    }
+    if (!order.contract) order.paymentAdjustment = Math.max(0, order.paid - (cancel ? 0 : order.total));
+    syncIssueReadiness(order);
+    syncCustomerBalances();
+    addAudit(cancel ? "Hủy đơn hàng" : "Cập nhật đơn hàng", code, `${previous} → ${order.status} · ${reason}${order.paymentAdjustment ? ` · Tiền chờ Kế toán xử lý: ${money(order.paymentAdjustment)}` : ""}`);
+    closeDialog(); render(true); toast(cancel ? "Đã hủy đơn và nhả hàng giữ." : "Đã cập nhật đơn hàng.");
+  }, { submitLabel: cancel ? "Xác nhận hủy" : "Lưu thay đổi", input: cancel ? undefined : updateShippingAddressField });
+}
+
+function issuePlan(order) {
+  const fail = (error) => ({ error });
+  if (!orderEligible(order)) return fail(orderEligibilityReason(order));
+  const lines = order.lines.filter((line) => line.held > 0).map((line) => ({ sku: line.sku, qty: line.held }));
+  if (!lines.length) return fail("Đơn chưa có lượng hàng đang giữ.");
+  const contract = order.contract ? contractByCode(order.contract) : null;
+  let shipment;
+  if (contract) {
+    if (contract.status !== "active") return fail("Hợp đồng chưa đủ điều kiện thực hiện.");
+    shipment = contract.shipments.find((entry) => {
+      const required = entry.remainingItems ?? entry.items;
+      return entry.status !== "delivered" && !entry.delivery && required.length === lines.length && required.every((item) => lines.some((line) => line.sku === item.sku && line.qty === item.qty));
+    });
+    if (!shipment) return fail("Lượng đang giữ cần khớp một đợt giao chưa xuất trong hợp đồng.");
+  } else if (!order.lines.every((line) => line.held === line.qty - line.shipped)) return fail("Đơn lẻ cần giữ đủ lượng hàng còn phải giao trước khi yêu cầu xuất.");
+  for (const line of order.lines.filter((entry) => entry.held > 0)) {
+    const product = productBySku(line.sku);
+    const reserved = state.reservations.filter((item) => item.order === order.code && item.sku === line.sku && item.status === "holding").reduce((sum, item) => sum + item.qty, 0);
+    if (!product || !Number.isSafeInteger(line.held) || line.held !== reserved || line.held > line.qty - line.shipped || line.held > product.physical - product.damaged || line.held > product.held) return fail("Số lượng xuất không khớp đơn, phiếu giữ hoặc tồn thực tế.");
+  }
+  return { lines, shipment, contract };
+}
+
+function issuePlanKey(plan) {
+  return plan.error ? "" : JSON.stringify([plan.shipment?.id || "", [...plan.lines].sort((a, b) => a.sku.localeCompare(b.sku))]);
+}
+
+function syncIssueReadiness(order) {
+  const key = issuePlanKey(issuePlan(order));
+  if (key && order.issueReadiness?.key === key) return;
+  if (order.issueRequest?.status === "pending") {
+    closeIssueRequest(order);
+    addAudit("Đóng yêu cầu xuất kho", order.code, "Lượng giữ hoặc điều kiện xuất đã thay đổi.");
+  }
+  order.issueReadiness = key ? { key, readyAt: new Date().toISOString() } : null;
+}
+
+function closeIssueRequest(order) {
+  const request = order.issueRequest;
+  request.status = "cancelled";
+  const recorded = order.issueRequests?.find((entry) => entry.requestedAt === request.requestedAt);
+  if (recorded) recorded.status = "cancelled";
+}
+
+function requestIssue(code) {
+  const order = orderByCode(code);
+  if (!order || !guardAction("request-issue")) return;
+  const plan = issuePlan(order);
+  if (plan.error) return toast(plan.error, "warning");
+  syncIssueReadiness(order);
+  if (order.issueRequest?.status === "pending") return toast("Đơn đã có yêu cầu xuất đang chờ Thủ kho.", "warning");
+  const requestedAt = new Date().toISOString();
+  const request = { status: "pending", key: issuePlanKey(plan), lines: plan.lines, shipmentId: plan.shipment?.id || "", readyAt: order.issueReadiness.readyAt, requestedAt, requestedBy: currentUser().name, actorId: state.activeUserId };
+  order.issueReadiness.requestedAt ||= requestedAt;
+  order.issueRequests ||= [];
+  order.issueRequests.push(request);
+  order.issueRequest = request;
+  addAudit("Yêu cầu xuất kho", code, plan.lines.map((line) => `${line.sku}: ${line.qty}`).join(" · "), "info");
+  render(true); toast("Đã gửi yêu cầu xuất cho Thủ kho. Chưa trừ tồn.");
+}
+
 function issueOrder(code) {
   const order = orderByCode(code);
   const validate = () => {
-    if (stockLock()) return `Kho đang khóa kiểm kê ${stockLock().code}. Hoàn tất kỳ trước khi xuất.`;
-    if (!orderEligible(order)) return orderEligibilityReason(order);
-    if (order.contract && contractByCode(order.contract)?.status !== "active") return "Hợp đồng chưa đủ điều kiện thực hiện.";
-    if (!order.lines.some((line) => line.held > 0)) return "Đơn chưa có lượng hàng đang giữ.";
-    if (order.contract) {
-      const contract = contractByCode(order.contract);
-      const planned = contract.shipments.find((shipment) => shipment.status !== "delivered" && !shipment.delivery && shipment.items.every((item) => order.lines.find((line) => line.sku === item.sku)?.held === item.qty) && order.lines.filter((line) => line.held > 0).length === shipment.items.length);
-      if (!planned) return "Lượng đang giữ cần khớp một đợt giao chưa xuất trong hợp đồng. Điều chỉnh giữ hàng hoặc lập đợt giao trước.";
-    }
-    for (const line of order.lines) {
-      const product = productBySku(line.sku);
-      if (line.held > line.qty - line.shipped || line.held > product.physical - product.damaged || line.held > product.held) return "Số lượng xuất không hợp lệ so với đơn và tồn thực tế.";
-    }
-    return "";
+    const plan = issuePlan(order);
+    if (plan.error) return plan;
+    const lock = stockLock(plan.lines.map((line) => line.sku));
+    if (lock) return { error: `Hàng đang khóa kiểm kê ${lock.code}. Hoàn tất kỳ trước khi xuất.` };
+    const request = order.issueRequest;
+    if (request?.status !== "pending" || request.key !== issuePlanKey(plan)) return { error: "Cần yêu cầu xuất hợp lệ từ Bán hàng, khớp lượng đang giữ." };
+    return plan;
   };
-  if (!order) return;
-  const error = validate();
+  if (!order || !guardAction("issue-order")) return;
+  const { error } = validate();
   if (error) return toast(error, "warning");
   confirmAction("Xác nhận xuất kho", `Xuất lượng đang giữ của ${code}. Giao dịch sẽ giảm tồn vật lý và giải phóng lượng giữ tương ứng.`, () => {
-    const conflict = validate();
+    if (!guardAction("issue-order")) return;
+    const { error: conflict, contract, shipment } = validate();
     if (conflict) return toast(conflict, "error");
-    const issue = { code: nextCode(state.issues, "code", `PX-${new Date().getFullYear()}-`), order: code, customerId: order.customerId, date: todayText(), status: "issued", owner: currentUser().name, lines: [] };
+    const request = order.issueRequest;
+    const issue = { code: nextCode(state.issues, "code", `PX-${new Date().getFullYear()}-`), order: code, customerId: order.customerId, date: todayText(), status: "issued", owner: currentUser().name, lines: [], requestedAt: request.requestedAt, requestedBy: request.requestedBy };
     order.lines.forEach((line) => {
       if (!line.held) return;
       const qty = line.held;
@@ -397,10 +728,11 @@ function issueOrder(code) {
       addMovement("Xuất kho", product.sku, -qty, product.physical, product.held, issue.code, code);
     });
     state.issues.unshift(issue); order.status = "issued";
-    order.issueRequestedAt = new Date().toISOString();
-    const contract = order.contract ? contractByCode(order.contract) : null;
-    const shipment = contract?.shipments.find((item) => item.status !== "delivered" && !item.delivery && item.items.every((line) => issue.lines.find((issued) => issued.sku === line.sku)?.qty === line.qty));
-    const delivery = { code: nextCode(state.deliveries, "code", `GH-${new Date().getFullYear()}-`), order: code, customerId: order.customerId, issue: issue.code, contract: contract?.code || "", shipmentId: shipment?.id || "", items: structuredClone(issue.lines), carrier: "", planned: shipment?.date || todayText(), status: "delivery_pending", fee: 0, payer: "SoulWine", note: "Chờ bàn giao vận chuyển" };
+    request.status = "issued";
+    const recorded = order.issueRequests?.find((entry) => entry.requestedAt === request.requestedAt);
+    if (recorded) Object.assign(recorded, { status: "issued", issue: issue.code });
+    order.issueReadiness = null;
+    const delivery = { code: nextCode(state.deliveries, "code", `GH-${new Date().getFullYear()}-`), order: code, customerId: order.customerId, issue: issue.code, contract: contract?.code || "", shipmentId: shipment?.id || "", items: structuredClone(issue.lines), carrier: "", address: order.address || "", planned: shipment?.date || todayText(), status: "delivery_pending", fee: 0, payer: "SoulWine", note: "Chờ bàn giao vận chuyển" };
     state.deliveries.unshift(delivery);
     if (shipment) { shipment.delivery = delivery.code; shipment.status = "issued"; }
     addAudit("Xác nhận xuất kho", issue.code, code, "success");
@@ -409,22 +741,35 @@ function issueOrder(code) {
 }
 
 function showContractForm() {
-  const quotes = state.quotes.filter((quote) => quote.status === "approved" && quote.confirmed && !state.contracts.some((contract) => contract.quote === quote.code));
-  if (!quotes.length) return toast("Chưa có báo giá đã duyệt, được khách xác nhận và chưa có hợp đồng. Duyệt một báo giá mới trước.", "info");
+  const canUseQuote = (quote) => quote?.status === "approved" && quote.confirmed && !quoteIsExpired(quote) && !state.contracts.some((contract) => contract.quote === quote.code);
+  const quotes = state.quotes.filter(canUseQuote);
+  if (!quotes.length) return toast("Cần báo giá còn hiệu lực, đã duyệt, đã được khách xác nhận và chưa có hợp đồng.", "info");
   showForm("Tạo hợp đồng từ báo giá", `<div class="form-grid">${selectField("quote", "Báo giá nguồn", quotes.map((quote) => [quote.code, `${quote.code} · ${customerName(quote.customerId)}`]))}${selectField("scheme", "Thanh toán", [["50/50", "50/50 theo thỏa thuận"], ["100%", "100% trước giao hàng"]])}${inputField("due", "Hạn thanh toán", "date", isoDate(todayText()), "required")}</div>`, (data) => {
     const quote = quoteByCode(data.get("quote"));
-    const contract = { code: nextCode(state.contracts, "code", `HĐ-${new Date().getFullYear()}-`), customerId: quote.customerId, quote: quote.code, owner: currentUser().name, value: quoteTotals(quote).total, paid: 0, status: "checking", scheme: data.get("scheme"), due: displayDate(data.get("due")), signedAt: "", lines: quote.lines.map((line) => ({ sku: line.sku, qty: line.qty, price: line.price, discount: line.discount })), checklist: { customerConfirm: false, accountantCheck: false, directorSign: false, customerSign: false, scan: false }, shipments: [] };
+    if (!canUseQuote(quote)) return formError("Báo giá không còn đủ điều kiện để lập hợp đồng.");
+    const contract = { code: nextCode(state.contracts, "code", `HĐ-${new Date().getFullYear()}-`), customerId: quote.customerId, quote: quote.code, owner: currentUser().name, value: quoteTotals(quote).total, paid: 0, status: "checking", scheme: data.get("scheme"), due: displayDate(data.get("due")), signedAt: "", lines: quote.lines.map(snapshotQuoteLine), quoteDiscount: { ...quoteWholeDiscount(quote) }, checklist: { customerConfirm: false, accountantCheck: false, directorSign: false, customerSign: false, scan: false }, shipments: [] };
     state.contracts.unshift(contract);
     addAudit("Tạo hợp đồng", contract.code, quote.code);
     closeDialog(); navigate(`contracts/${encodeURIComponent(contract.code)}`); toast("Đã tạo hợp đồng, chuyển Kế toán kiểm tra.");
   }, { submitLabel: "Tạo hợp đồng" });
 }
 
+const CONTRACT_CHECK_ROLES = { customerConfirm: ["sales_manager", "sales_staff"], accountantCheck: ["accountant"], directorSign: ["director"], customerSign: ["sales_manager", "accountant"], scan: ["sales_manager", "accountant"] };
+
+function contractCheckError(contract, name) {
+  if (!contract || !CONTRACT_CHECK_ROLES[name]?.includes(state.role)) return "Bước này cần người đúng thẩm quyền xác nhận.";
+  if (!["checking", "pending_sign"].includes(contract.status) || contract.checklist[name]) return "Bước ký kết không còn chờ xử lý.";
+  if (name === "customerConfirm" && !contract.checklist.accountantCheck) return "Kế toán cần kiểm tra điều khoản trước khi khách xác nhận nội dung.";
+  if (name === "directorSign" && (!contract.checklist.accountantCheck || !contract.checklist.customerConfirm)) return "Cần Kế toán kiểm tra và khách xác nhận nội dung trước khi Giám đốc ký.";
+  if (name === "customerSign" && !contract.checklist.directorSign) return "Cần Giám đốc ký trước khi ghi nhận khách hoàn tất ký.";
+  if (name === "scan" && (!contract.checklist.directorSign || !contract.checklist.customerSign)) return "Chỉ tải bản scan sau khi cả hai bên đã ký.";
+  return "";
+}
+
 function updateContractCheck(code, name) {
   const contract = contractByCode(code);
-  const roles = { customerConfirm: ["sales_manager", "sales_staff"], accountantCheck: ["accountant"], directorSign: ["director"], customerSign: ["sales_manager", "accountant"], scan: ["sales_manager", "accountant"] };
-  if (!contract || !roles[name]?.includes(state.role)) return toast("Bước này cần người đúng thẩm quyền xác nhận. Kiểm tra vai trò đang sử dụng.", "warning");
-  if (["active", "liquidated", "cancelled"].includes(contract.status)) return;
+  const error = contractCheckError(contract, name);
+  if (error) return toast(error, "warning");
   if (name === "scan") return chooseFile((files) => {
     contract.checklist.scan = true;
     contract.scanName = files[0].name; contract.scanId = files[0].id;
@@ -434,8 +779,6 @@ function updateContractCheck(code, name) {
     addAudit("Lưu hợp đồng đã ký", code, files[0].name);
     finishContractSignature(contract);
   }, false, code);
-  if (name === "directorSign" && !contract.checklist.accountantCheck) return toast("Kế toán cần kiểm tra trước khi Giám đốc ký.", "warning");
-  if (name === "customerSign" && !contract.checklist.directorSign) return toast("Cần Giám đốc ký trước khi ghi nhận khách hoàn tất ký.", "warning");
   contract.checklist[name] = true;
   if (name === "accountantCheck") contract.status = "pending_sign";
   addAudit("Cập nhật ký kết", code, CONTRACT_CHECKS.find(([key]) => key === name)[1]);
@@ -470,6 +813,7 @@ function showShipmentForm(code) {
       if (!Number.isInteger(item.qty) || item.qty < 0 || planned + item.qty > limit) return formError(`${item.sku}: tổng các đợt giao vượt lượng hợp đồng (${limit}).`);
     }
     contract.shipments.push({ id: `Đợt ${contract.shipments.length + 1}`, date: displayDate(data.get("date")), items: items.filter((item) => item.qty > 0), status: "planned", note: data.get("note") });
+    state.orders.filter((order) => order.contract === code).forEach(syncIssueReadiness);
     addAudit("Lập đợt giao", code, displayDate(data.get("date")));
     closeDialog(); render(true); toast("Đã thêm đợt giao, không thay đổi lịch thanh toán.");
   });
@@ -509,17 +853,28 @@ function refreshReceiptEditor(receipt) {
 
 function confirmReceipt(code, returnLot = false) {
   const receipt = receiptByCode(code);
-  if (!receipt || receipt.status !== "receiving") return;
-  const threshold = receiptThreshold(receipt);
-  if (!returnLot && threshold === null) return toast("Thiết lập ngưỡng sai lệch trong Cài đặt trước khi xác nhận nhập.", "warning");
+  if (!guardAction(returnLot ? "return-receipt" : "confirm-receipt") || !receipt || receipt.status !== "receiving") return;
+  if (receipt.source && returnLot) return;
+  const order = receipt.po && !receipt.source ? state.purchaseOrders.find((item) => item.code === receipt.po) : null;
+  const activePoAttempt = () => !receipt.po || receipt.source || (order && state.purchaseOrders.includes(order) && order.receipt === code && order.status === "receiving");
+  if (!activePoAttempt()) return toast("Phiếu không còn là lần tiếp nhận hiện tại của đơn đặt hàng.", "warning");
+  const canRefuse = () => order && receiptOverThreshold(receipt) && receipt.lines.every((line) => line.good + line.damaged === line.received);
+  if (returnLot && !canRefuse()) return toast("Chỉ trả lô đã đối chiếu đầy đủ và vượt ngưỡng sai lệch đã cấu hình.", "warning");
+  if (!returnLot && !receipt.source && receiptThreshold(receipt) === null) return toast("Thiết lập ngưỡng sai lệch trong Cài đặt trước khi xác nhận nhập.", "warning");
   if (!receiptCountsComplete(receipt)) return toast("Nhập đủ số thực nhận, đạt và lỗi cho mọi dòng trước khi quyết định.", "warning");
   if (!receipt.evidence.length) return toast("Đính kèm phiếu giao / biên bản kiểm đếm trước khi xác nhận kết quả.", "warning");
-  if (!returnLot && stockLock()) return toast("Không thể nhập kho trong kỳ đang khóa kiểm kê.", "warning");
+  const receiptLock = () => stockLock(receipt.lines.map((line) => line.sku));
+  const lock = !returnLot && receiptLock();
+  if (lock) return toast(`Có SKU nhập đang khóa theo kỳ ${lock.code}.`, "warning");
   if (!returnLot && receiptOverThreshold(receipt)) return toast("Sai lệch vượt ngưỡng: phải trả lô và yêu cầu giao lại.", "warning");
   if (!returnLot && receipt.lines.some((line) => line.good + line.damaged !== line.received)) return toast("Hàng đạt + hư hỏng phải bằng thực nhận ở từng dòng.", "warning");
   confirmAction(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", returnLot ? "Không ghi tăng tồn. Lưu yêu cầu nhà cung cấp giao lại." : "Ghi tăng tồn vật lý theo thực nhận; hàng lỗi được tách khỏi tồn khả dụng.", () => {
-    if (receipt.status !== "receiving") return;
-    if (!returnLot && stockLock()) return toast("Kho đã bị khóa kiểm kê, không thể ghi nhập.", "error");
+    if (receiptByCode(code) !== receipt || receipt.status !== "receiving" || !guardAction(returnLot ? "return-receipt" : "confirm-receipt")) return;
+    if (!activePoAttempt() || (returnLot && !canRefuse())) return toast("Dữ liệu tiếp nhận không còn đủ điều kiện xác nhận.", "warning");
+    const currentLock = !returnLot && receiptLock();
+    if (currentLock) return toast(`Có SKU nhập đang khóa theo kỳ ${currentLock.code}.`, "error");
+    if (!receiptCountsComplete(receipt) || !receipt.evidence.length || (!returnLot && ((!receipt.source && receiptThreshold(receipt) === null) || receiptOverThreshold(receipt) || receipt.lines.some((line) => line.good + line.damaged !== line.received)))) return toast("Dữ liệu tiếp nhận không còn đủ điều kiện xác nhận.", "warning");
+    const threshold = receiptThreshold(receipt);
     if (!returnLot) receipt.lines.forEach((line) => {
       const product = productBySku(line.sku);
       product.physical += line.received; product.damaged += line.damaged;
@@ -528,19 +883,22 @@ function confirmReceipt(code, returnLot = false) {
     receipt.status = returnLot ? "returned" : "completed";
     const supplier = state.suppliers.find((item) => item.id === receipt.supplier);
     if (supplier && !returnLot) supplier.lastDelivery = todayText();
+    if (order) {
+      receipt.decidedAt = new Date().toISOString();
+      receipt.decidedBy = currentUser().name;
+      order.status = returnLot ? "returned" : "completed";
+    }
     receipt.threshold = threshold;
-    const order = state.purchaseOrders.find((item) => item.code === receipt.po);
-    if (order) order.status = returnLot ? "returned" : "completed";
-    addAudit(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", code, receipt.po, returnLot ? "danger" : "success");
+    addAudit(returnLot ? "Trả lô hàng" : "Xác nhận nhập kho", code, receipt.po || `${receipt.source} · ${receipt.note}`, returnLot ? "danger" : "success");
     render(true); toast(returnLot ? "Đã ghi trả lô, yêu cầu giao lại." : "Đã nhập kho và ghi thẻ kho.");
   }, returnLot);
 }
 
 function updateStocktakeInput(input) {
-  if (!["warehouse_manager", "warehouse_staff"].includes(state.role)) return;
+  if (workspaceStatus.conflict || !["warehouse_manager", "warehouse_staff"].includes(state.role)) return;
   const stocktake = stocktakeByCode(input.dataset.code);
   const line = stocktake?.lines.find((item) => item.sku === input.dataset.sku);
-  if (!line || stocktake.status !== "counting") return;
+  if (!line || stocktake.status !== "counting" || !isStocktakeLocked(stocktake)) return;
   if (input.dataset.stField === "note") line.note = input.value;
   else {
     const value = input.value === "" ? null : Number(input.value);
@@ -570,8 +928,11 @@ function updateStocktakeInput(input) {
 function showAdjustmentForm(code, sku) {
   const stocktake = stocktakeByCode(code);
   const line = stocktake?.lines.find((item) => item.sku === sku);
-  if (!line || line.count === null || !["reconciling", "reported"].includes(stocktake.status)) return toast("Hoàn tất đếm trước khi giải trình điều chỉnh.", "warning");
+  const canAdjust = () => line && line.count !== null && isStocktakeLocked(stocktake) && ["reconciling", "reported"].includes(stocktake.status);
+  if (!guardAction("open-adjustment")) return;
+  if (!canAdjust()) return toast("Hoàn tất đếm trước khi giải trình điều chỉnh.", "warning");
   showForm("Giải trình chênh lệch", `<div class="banner warning mb-16">${escapeHtml(productName(sku))} · Sổ sách ${line.system} · Đếm ${line.count} · Lệch ${line.count - line.system}</div>${inputField("reason", "Nguyên nhân đã kiểm tra / đếm lại", "text", line.note, "required maxlength=240")}<p class="hint mt-12">Chỉ ghi nhận căn cứ. Tồn được điều chỉnh một lần khi hoàn tất kỳ kiểm kê.</p>`, (data) => {
+    if (!guardAction("open-adjustment") || stocktakeByCode(code) !== stocktake || !canAdjust()) return formError("Kỳ không còn ở trạng thái đối chiếu.");
     if (!data.get("reason").trim()) return formError("Cần ghi nguyên nhân chênh lệch.");
     line.note = data.get("reason").trim(); line.reviewed = true;
     addAudit("Xác nhận chênh lệch kiểm kê", code, `${sku}: ${line.note}`);
@@ -581,12 +942,22 @@ function showAdjustmentForm(code, sku) {
 
 function completeStocktake(code) {
   const stocktake = stocktakeByCode(code);
-  if (!stocktake || !["reconciling", "reported"].includes(stocktake.status)) return toast("Cần hoàn tất đếm, đối chiếu trước khi đóng kỳ.", "warning");
-  if (stocktakeProgress(stocktake).missing) return toast("Còn mã chưa kiểm đếm.", "warning");
-  if (stocktake.lines.some((line) => line.count !== line.system && !line.reviewed)) return toast("Mỗi mã chênh lệch phải được kiểm tra và xác nhận nguyên nhân qua nút Điều chỉnh.", "warning");
-  if (stocktake.lines.some((line) => line.count < productBySku(line.sku).held + productBySku(line.sku).damaged)) return toast("Số đếm thấp hơn lượng giữ + hàng lỗi. Kiểm tra lại trước khi đóng kỳ.", "warning");
-  confirmAction("Hoàn tất kiểm kê & mở khóa", "Áp dụng kết quả đã kiểm tra, lưu biên bản và mở lại nhập/xuất. Không thể sửa kỳ đã hoàn tất.", () => {
-    if (stocktake.status === "completed") return;
+  const validate = () => {
+    if (!stocktake || stocktakeByCode(code) !== stocktake || !isStocktakeLocked(stocktake) || !["reconciling", "reported"].includes(stocktake.status)) return "Cần hoàn tất đếm, đối chiếu trước khi đóng kỳ.";
+    if (!stocktake.lines.length || stocktake.lines.some((line) => !Number.isSafeInteger(line.count) || line.count < 0)) return "Còn mã chưa có số kiểm đếm hợp lệ.";
+    if (stocktake.lines.some((line) => line.count !== line.system && !line.reviewed)) return "Mỗi mã chênh lệch phải được kiểm tra và xác nhận nguyên nhân qua nút Điều chỉnh.";
+    if (stocktake.lines.some((line) => {
+      const product = productBySku(line.sku);
+      return !product || line.count < product.held + product.damaged;
+    })) return "SKU không còn tồn tại hoặc số đếm thấp hơn lượng giữ + hàng lỗi.";
+  };
+  if (!guardAction("complete-stocktake")) return;
+  const error = validate();
+  if (error) return toast(error, "warning");
+  confirmAction("Hoàn tất kiểm kê & mở khóa", "Áp dụng kết quả đã kiểm tra, lưu biên bản và giải phóng khóa của kỳ này. Không thể sửa kỳ đã hoàn tất.", () => {
+    if (!guardAction("complete-stocktake")) return;
+    const currentError = validate();
+    if (currentError) return toast(currentError, "warning");
     stocktake.lines.forEach((line) => {
       const product = productBySku(line.sku);
       const variance = line.count - product.physical;
@@ -596,26 +967,61 @@ function completeStocktake(code) {
     stocktake.closedAt = new Date().toISOString();
     stocktake.closedLines = stocktake.lines.map((line) => ({ sku: line.sku, count: line.count, final: productBySku(line.sku).physical }));
     addAudit("Hoàn tất kiểm kê & mở khóa", code, "Đã lưu biên bản và báo cáo Giám đốc", "success");
-    state.ui.stocktakeTab = "report"; render(true); toast("Kỳ kiểm kê hoàn tất. Nhập/xuất đã mở lại.");
+    state.ui.stocktakeTab = "report"; render(true); toast("Kỳ kiểm kê hoàn tất. Đã giải phóng khóa của kỳ này.");
   });
 }
 
 function showNewStocktakeForm() {
-  if (stockLock()) return toast(`Đang có kỳ ${stockLock().code} khóa kho. Hoàn tất kỳ đó trước.`, "warning");
+  if (!guardAction("new-stocktake")) return;
+  const warehouseLock = state.stocktakes.find((period) => isStocktakeLocked(period) && !isGroupStocktake(period));
+  if (warehouseLock) return toast(`Đang có kỳ ${warehouseLock.code} khóa toàn kho.`, "warning");
   if (!state.products.length) return toast("Thêm sản phẩm trước khi tạo kỳ kiểm kê.", "info");
-  showForm("Tạo kỳ kiểm kê", `${inputField("scope", "Phạm vi kiểm kê", "text", "Toàn kho", "required")}<div class="banner locked mt-16">Bắt đầu kỳ sẽ khóa toàn bộ nhập/xuất đến khi đối chiếu và hoàn tất.</div>`, (data) => {
+  const categories = [...new Set(state.products.map((product) => product.category).filter((category) => typeof category === "string" && category.trim()))].sort((a, b) => a.localeCompare(b, "vi"));
+  showForm("Tạo kỳ kiểm kê", `<div class="form-grid">${selectField("scopeType", "Phạm vi kiểm kê", [["whole", "Toàn bộ kho"], ["group", "Theo nhóm hàng"]], "whole")}${selectField("category", "Nhóm hàng", [["", "Chọn nhóm hàng"], ...categories.map((category) => [category, category])])}</div><div class="banner locked mt-16">Khi bắt đầu, hệ thống ghi thời điểm hiện tại và chụp số tồn của các SKU trong phạm vi chọn. Chỉ các SKU thuộc phạm vi đó bị khóa.</div>`, (data) => {
+    if (!guardAction("new-stocktake")) return;
+    const scopeType = data.get("scopeType");
+    const category = scopeType === "group" ? data.get("category") : "";
+    if (!["whole", "group"].includes(scopeType) || (scopeType === "group" && !categories.includes(category))) return formError("Chọn phạm vi và nhóm hàng hợp lệ.");
+    const products = state.products.filter((product) => scopeType === "whole" || product.category === category);
+    if (!products.length) return formError("Không có SKU trong phạm vi kiểm kê đã chọn.");
+    const lock = scopeType === "whole" ? stockLock() : stockLock(products.map((product) => product.sku)) || state.stocktakes.find((period) => isStocktakeLocked(period) && period.category === category);
+    if (lock) return formError(`Phạm vi đã bị khóa bởi kỳ ${lock.code}.`);
     const code = nextCode(state.stocktakes, "code", `KK-${new Date().getFullYear()}-`, 2);
-    state.stocktakes.unshift({ code, scope: data.get("scope"), started: nowStamp(), status: "counting", locked: true, owner: currentUser().name, reportTo: "", lines: state.products.filter((product) => product.status === "product_active").map((product) => ({ sku: product.sku, system: product.physical, count: null, note: "" })) });
-    addAudit("Tạo kỳ kiểm kê", code, "Khóa nhập/xuất");
+    const scope = scopeType === "whole" ? "Toàn bộ kho" : `Nhóm: ${category}`;
+    state.stocktakes.unshift({ code, scope, scopeType, ...(category ? { category } : {}), started: nowStamp(), startedAt: new Date().toISOString(), status: "counting", locked: true, owner: currentUser().name, reportTo: "", lines: products.map((product) => ({ sku: product.sku, system: product.physical, count: null, note: "" })) });
+    addAudit("Tạo kỳ kiểm kê", code, `${scope} · ${products.length} SKU · Khóa giao dịch kho`);
     closeDialog(); navigate(`stocktakes/${code}`);
-  }, { submitLabel: "Bắt đầu & khóa kho" });
+  }, { submitLabel: "Bắt đầu kiểm kê", input: () => {
+    const fields = document.getElementById("action-form")?.elements;
+    if (fields) { fields.category.disabled = fields.scopeType.value !== "group"; fields.category.required = !fields.category.disabled; }
+  } });
+}
+
+function canCancelStocktake(period) {
+  return state.loggedIn && state.role === "warehouse_manager" && state.settings.rules.allowStocktakeCancellation === true &&
+    period && isStocktakeLocked(period) && ["counting", "reconciling", "reported"].includes(period.status);
+}
+
+function showCancelStocktakeForm(code) {
+  const period = stocktakeByCode(code);
+  if (!guardAction("cancel-stocktake")) return;
+  if (!canCancelStocktake(period)) return toast("Kỳ không thể hủy hoặc quy tắc hủy chưa được Giám đốc bật.", "warning");
+  showForm("Hủy kỳ kiểm kê", `${inputField("reason", "Lý do hủy", "text", "", "required maxlength=240")}<div class="banner warning mt-16">Xác nhận hủy sẽ kết thúc kỳ, giữ nguyên số đã đếm và mở khóa phạm vi của kỳ này. Không ghi điều chỉnh tồn.</div>`, (data) => {
+    if (!guardAction("cancel-stocktake") || stocktakeByCode(code) !== period || !canCancelStocktake(period)) return formError("Kỳ không còn được phép hủy.");
+    const reason = String(data.get("reason") ?? "").trim();
+    if (!reason || reason.length > 240) return formError("Nhập lý do hủy, tối đa 240 ký tự.");
+    Object.assign(period, { status: "cancelled", locked: false, cancellationReason: reason, cancelledAt: new Date().toISOString(), cancelledBy: state.activeUserId });
+    addAudit("Hủy kỳ kiểm kê", code, `${reason} · Không điều chỉnh tồn`, "warning");
+    state.ui.stocktakeTab = "history";
+    closeDialog(); render(true); toast("Đã hủy kỳ và giải phóng khóa; tồn kho không thay đổi.");
+  }, { submitLabel: "Xác nhận hủy kỳ" });
 }
 
 function showCustomer(id) {
   const customer = customerById(id);
   if (!customer) return;
-  showDialog({ drawer: true, title: customer.name, subtitle: `${customer.id} · ${customer.type}`, body: `<div class="kv-grid"><div><div class="kv-label">Liên hệ</div><div class="kv-value">${escapeHtml(customer.contact)}</div></div><div><div class="kv-label">Điện thoại</div><div class="kv-value">${escapeHtml(customer.phone)}</div></div><div><div class="kv-label">Email</div><div class="kv-value">${escapeHtml(customer.email || "—")}</div></div><div><div class="kv-label">Mã số thuế</div><div class="kv-value">${escapeHtml(customer.tax || "—")}</div></div><div class="full"><div class="kv-label">Địa chỉ giao hàng</div><div class="kv-value">${escapeHtml(customer.address)}</div></div></div><div class="divider"></div><h3 class="section-title">Đơn hàng liên quan</h3>${state.orders.filter((order) => order.customerId === id).map((order) => `<a class="picker-row" href="${hrefFor("orders", order.code)}"><span>${order.code}</span>${statusChip(order.status)}<span>${money(order.total)}</span></a>`).join("") || '<p class="muted small">Chưa có đơn hàng.</p>'}<div class="divider"></div><p class="small muted">${escapeHtml(customer.note)}</p>` });
-  if (ACTION_ROLES["edit-customer"].includes(state.role)) document.querySelector(".drawer")?.insertAdjacentHTML("beforeend", `<div class="drawer-foot"><button class="btn btn-primary" data-action="edit-customer" data-id="${customer.id}">${icon("edit")}Chỉnh sửa hồ sơ</button></div>`);
+  showDialog({ drawer: true, title: customer.name, subtitle: `${customer.id} · ${customer.type}`, body: customerDetailHtml(customer),
+    footer: ACTION_ROLES["edit-customer"].includes(state.role) ? `<button class="btn btn-primary" data-action="edit-customer" data-id="${escapeHtml(customer.id)}">${icon("edit")}Chỉnh sửa hồ sơ</button>` : "" });
 }
 
 function showProduct(sku) {
@@ -683,21 +1089,26 @@ function showSecondaryDetails(kind, code) {
   } else if (kind === "request") {
     const request = state.purchaseRequests.find((item) => item.code === code);
     if (!request) return;
-    showDialog({ drawer: true, title: code, subtitle: supplierName(request.supplier), body: `${statusChip(request.status)}<p class="small muted mt-16">${escapeHtml(request.note)}</p><p class="strong mt-12">${money(request.amount)}</p>${request.lines.map((line) => `<div class="picker-row">${productCell(line.sku)}<strong>${line.qty}</strong></div>`).join("")}<a class="btn btn-secondary mt-16" href="#/approvals">Mở phê duyệt</a>` });
+    showDialog({ drawer: true, title: code, subtitle: supplierName(request.supplier), body: `${statusChip(request.status)}<p class="small muted mt-16">${escapeHtml(request.note)}</p><p class="strong mt-12">${money(request.amount)}</p>${request.lines.map((line) => `<div class="picker-row">${productCell(line.sku)}<strong>${line.qty}</strong></div>`).join("")}<div class="mt-16"><div class="section-title">Báo giá nhà cung cấp</div>${purchaseAttachment(request.quoteAttachmentId, request.code)}</div><a class="btn btn-secondary mt-16" href="#/approvals">Mở phê duyệt</a>` });
+  } else if (kind === "purchase-order") {
+    const order = state.purchaseOrders.find((item) => item.code === code);
+    if (order) showDialog({ drawer: true, wide: true, title: code, subtitle: supplierName(order.supplier), body: purchaseOrderDetails(order) });
   } else if (kind === "delivery") {
     const delivery = state.deliveries.find((item) => item.code === code);
-    if (!delivery) return;
-    showDialog({ drawer: true, title: code, subtitle: `${delivery.order} · ${customerName(delivery.customerId)}`, body: `${statusChip(delivery.status)}<div class="summary-list mt-16">${[["Đơn vị vận chuyển", delivery.carrier || "Chưa bàn giao"], ["Ngày dự kiến", delivery.planned], ["Chi phí", money(delivery.fee)], ["Bên chịu phí", delivery.payer], ["Ghi chú", delivery.note]].map(([label, value]) => `<div class="summary-row"><span>${escapeHtml(label)}</span><span class="value">${escapeHtml(value)}</span></div>`).join("")}</div>${delivery.evidenceId ? `<div class="mt-16"><button class="file-chip" data-action="view-attachment" data-id="${delivery.evidenceId}">${icon("file")}Biên bản giao nhận</button></div>` : ""}<div class="banner info mt-16">Ghi nhận theo xác nhận của đơn vị vận chuyển và biên bản có chữ ký khách hàng.</div>`, footer: ["sales_staff", "sales_manager", "warehouse_manager"].includes(state.role) ? delivery.status === "shipping" ? `<button class="btn btn-danger" data-action="delivery-result" data-code="${code}" data-result="failed">Giao thất bại</button><button class="btn btn-primary" data-action="delivery-result" data-code="${code}" data-result="delivered">Xác nhận đã giao</button>` : ["delivery_pending", "failed"].includes(delivery.status) ? `<button class="btn btn-primary" data-action="schedule-delivery" data-code="${code}">${delivery.status === "failed" ? "Lên lịch giao lại" : "Bàn giao vận chuyển"}</button>` : "" : "" });
+    if (delivery) showDialog(deliveryDetails(delivery));
   } else if (kind === "return") {
     const item = state.returns.find((entry) => entry.code === code);
-    if (!item) return;
-    showDialog({ drawer: true, title: code, subtitle: `${item.order} · ${customerName(item.customerId)}`, body: `${statusChip(item.status)}<div class="picker-row">${productCell(item.sku)}<strong>${item.qty}</strong></div><p class="small mt-12">${escapeHtml(item.reason)} · ${escapeHtml(item.note)}</p><div class="banner warning mt-16">Phân loại hàng đạt / hư hỏng và xác nhận số thực nhận trước khi cập nhật tồn. Hoàn tiền / đổi bù cần chính sách được chốt.</div>`, footer: state.role === "warehouse_manager" && item.status === "inspecting" ? `<button class="btn btn-primary" data-action="return-inspection" data-code="${code}">Kiểm tra hàng hoàn</button>` : "" });
+    if (item) showDialog(returnDetails(item));
   }
 }
 
 function dispatchAction(action, data = {}) {
   if (!guardAction(action)) return;
-  const managementActions = ["new-product", "edit-product", "new-supplier", "opening-stock", "new-purchase-request", "create-po", "create-receipt", "create-wholesale-order", "schedule-delivery", "new-return", "add-cart-row", "remove-cart-row", "backup-workspace", "retry-save", "reload-workspace", "download-recovery", "restore-backup", "clear-workspace", "discard-settings", "metric-help", "clear-filters", "sort-table", "page-table", "open-help", "view-attachment", "reset-user-password", "unlock-account", "change-password"];
+  if (action === "create-basic-receipt") return handleManagementAction(action, data);
+  if (action === "redeliver-po" && data.previous) return showReceiptForm(data.code, data.previous);
+  if (action === "record-supplier-payment" || action === "record-purchase-cost") return showPurchaseFinanceForm(data.code, action === "record-purchase-cost");
+  if (action === "open-po") return showSecondaryDetails("purchase-order", data.code);
+  const managementActions = ["new-product", "edit-product", "new-supplier", "opening-stock", "new-purchase-request", "create-po", "create-receipt", "create-wholesale-order", "schedule-delivery", "new-return", "add-cart-row", "remove-cart-row", "backup-workspace", "retry-save", "reload-workspace", "download-recovery", "restore-backup", "clear-workspace", "discard-settings", "metric-help", "clear-filters", "sort-table", "page-table", "open-help", "view-attachment", "reset-user-password", "unlock-account", "change-password", "connect-sync", "disconnect-sync"];
   if (managementActions.includes(action)) return handleManagementAction(action, data);
   if (action.startsWith("export-")) { closePopover(); return exportData(action); }
   if (action.startsWith("refresh-")) { state.lastRefresh = nowTime(); render(true); return toast("Đã đối chiếu dữ liệu trên thiết bị.", "info"); }
@@ -718,7 +1129,9 @@ function dispatchAction(action, data = {}) {
     case "confirm-quote": {
       const quote = currentQuote();
       if (!quote || quote.status !== "approved") return;
+      if (quoteIsExpired(quote)) return toast("Báo giá đã hết hiệu lực. Tạo phiên bản mới trước khi xác nhận.", "warning");
       return showForm("Ghi nhận khách xác nhận báo giá", inputField("reference", "Căn cứ xác nhận (email / cuộc gọi / trao đổi)", "text", "", "required maxlength=200"), (form) => {
+        if (quoteIsExpired(quote)) return formError("Báo giá đã hết hiệu lực.");
         if (!form.get("reference").trim()) return formError("Cần căn cứ xác nhận từ khách.");
         quote.confirmed = true; addAudit("Khách xác nhận báo giá", quote.code, form.get("reference"));
         closeDialog(); render(true); toast("Đã ghi nhận khách xác nhận, có thể tạo hợp đồng.");
@@ -738,10 +1151,24 @@ function dispatchAction(action, data = {}) {
     case "remove-line": if (quoteEditable(currentQuote())) { currentQuote().lines = currentQuote().lines.filter((line) => line.sku !== data.sku); render(true); } return;
     case "new-customer": return showCustomerForm();
     case "new-order": return showRetailOrderForm();
+    case "configure-permissions": return showPermissionSettings();
+    case "edit-order": return showOrderChange(data.code);
+    case "cancel-order": return showOrderChange(data.code, true);
     case "open-payment": return showPaymentForm(data.record);
     case "open-invoice": return showInvoiceForm(data.record);
     case "open-reserve": return showReservationForm(data.sku);
     case "release-reservation": return releaseReservation(data.id);
+    case "request-issue": return requestIssue(data.code);
+    case "cancel-issue-request": {
+      const order = orderByCode(data.code);
+      if (order?.issueRequest?.status !== "pending") return;
+      return showForm("Hủy yêu cầu xuất kho", inputField("reason", "Lý do", "text", "", "required maxlength=200"), (form) => {
+        if (!guardAction(action) || order.issueRequest?.status !== "pending" || !form.get("reason").trim()) return formError("Yêu cầu không còn chờ hoặc chưa có lý do.");
+        closeIssueRequest(order);
+        addAudit("Hủy yêu cầu xuất kho", order.code, form.get("reason").trim());
+        closeDialog(); render(true); toast("Đã hủy yêu cầu xuất. Lượng giữ không thay đổi.");
+      });
+    }
     case "issue-order": return issueOrder(data.code);
     case "bulk-check": return showBulkCheck();
     case "select-approval": state.ui.selectedApproval = data.id; return render(true);
@@ -753,31 +1180,46 @@ function dispatchAction(action, data = {}) {
     case "add-shipment": return showShipmentForm(data.code);
     case "liquidate-contract": {
       const contract = contractByCode(data.code);
-      if (!contract || contract.paid < contract.value || !contract.shipments.length || contract.shipments.some((shipment) => shipment.status !== "delivered")) return toast("Chỉ thanh lý khi đã giao đủ và thu đủ theo hợp đồng.", "warning");
-      return confirmAction("Thanh lý hợp đồng", `Kết thúc ${data.code} sau khi giao đủ, thu đủ.`, () => { contract.status = "liquidated"; addAudit("Thanh lý hợp đồng", data.code, "Đã giao đủ và thu đủ", "success"); render(true); toast("Đã thanh lý hợp đồng."); });
+      if (!canLiquidateContract(contract)) return toast("Chỉ thanh lý khi đã giao đủ từng SKU và thu đủ theo hợp đồng.", "warning");
+      return confirmAction("Thanh lý hợp đồng", `Kết thúc ${data.code} sau khi giao đủ, thu đủ.`, () => {
+        if (!canLiquidateContract(contract)) return toast("Hợp đồng không còn đủ điều kiện thanh lý.", "warning");
+        contract.status = "liquidated"; addAudit("Thanh lý hợp đồng", data.code, "Đã giao đủ và thu đủ", "success"); render(true); toast("Đã thanh lý hợp đồng.");
+      });
     }
     case "save-receipt": persistWorkspace(); renderStorageStatus(); return toast("Đã lưu số liệu kiểm đếm, chưa ghi tăng tồn.", "info");
     case "confirm-receipt": return confirmReceipt(data.code);
     case "return-receipt": return confirmReceipt(data.code, true);
-    case "upload-evidence": return chooseFile((files) => { receiptByCode(data.code).evidence.push(...files.map((file) => file.name)); render(true); toast("Đã lưu tệp trên thiết bị."); }, true, data.code);
+    case "upload-evidence": {
+      const receipt = receiptByCode(data.code);
+      if (!receipt || (receipt.po && receipt.status !== "receiving")) return;
+      return chooseFile((files) => {
+        if (receiptByCode(data.code) !== receipt || !guardAction("upload-evidence") || (receipt.po && receipt.status !== "receiving")) {
+          files.forEach((file) => delete state.attachments[file.id]);
+          persistWorkspace();
+          return;
+        }
+        receipt.evidence.push(...files.map((file) => file.name)); render(true); toast("Đã lưu tệp trên thiết bị.");
+      }, true, data.code);
+    }
     case "new-stocktake": return showNewStocktakeForm();
+    case "cancel-stocktake": return showCancelStocktakeForm(data.code);
     case "finish-count": {
       const stocktake = stocktakeByCode(data.code);
-      if (!stocktake || stocktake.status !== "counting" || stocktakeProgress(stocktake).missing) return toast("Chưa nhập đủ số kiểm đếm.", "warning");
+      if (!stocktake || stocktake.status !== "counting" || !isStocktakeLocked(stocktake) || stocktakeProgress(stocktake).missing) return toast("Chưa nhập đủ số kiểm đếm hoặc kỳ đã kết thúc.", "warning");
       stocktake.status = "reconciling"; state.ui.stocktakeTab = "reconcile";
       addAudit("Chốt số đếm", data.code, "Chuyển đối chiếu"); return render(true);
     }
     case "request-recount": {
       const stocktake = stocktakeByCode(data.code);
       const line = stocktake?.lines.find((item) => item.sku === data.sku);
-      if (!line || stocktake.status === "completed") return;
+      if (!line || !isStocktakeLocked(stocktake) || !["reconciling", "reported"].includes(stocktake.status)) return;
       line.count = null; line.reviewed = false; stocktake.status = "counting"; state.ui.stocktakeTab = "count";
       addAudit("Yêu cầu đếm lại", data.code, data.sku); render(true); return toast("Đã mở lại dòng cần đếm; ghi số thực tế mới.", "info");
     }
     case "open-adjustment": return showAdjustmentForm(data.code, data.sku);
     case "report-stocktake": {
       const stocktake = stocktakeByCode(data.code);
-      if (!stocktake || !["reconciling", "reported"].includes(stocktake.status)) return toast("Cần chốt số đếm trước khi báo cáo.", "warning");
+      if (!stocktake || !isStocktakeLocked(stocktake) || !["reconciling", "reported"].includes(stocktake.status)) return toast("Cần chốt số đếm trước khi báo cáo.", "warning");
       stocktake.reportTo = nowStamp(); stocktake.status = "reported";
       addAudit("Ghi nhận báo cáo kiểm kê", data.code, "Đã ghi nhận báo cáo trong nhật ký"); render(true); return toast("Đã lưu báo cáo kiểm kê.");
     }
@@ -801,57 +1243,263 @@ function dispatchAction(action, data = {}) {
     case "open-delivery": return showSecondaryDetails("delivery", data.code);
     case "open-return": return showSecondaryDetails("return", data.code);
     case "delivery-result": return showDeliveryResultForm(data.code, data.result);
+    case "new-undelivered-return": return showReturnForm(true);
+    case "return-receive": return showReturnReceipt(data.code);
     case "return-inspection": return showReturnInspection(data.code);
+    case "return-finance-evidence": return showReturnResolutionEvidence(data.code, "finance");
+    case "return-replacement-evidence": return showReturnResolutionEvidence(data.code, "replacement");
     case "mark-all-read": allowedNotifications().forEach((item) => item.unread = false); persistWorkspace(); closePopover(); renderShell(); return toast("Đã đánh dấu thông báo là đã đọc.");
     case "logout": {
       if (activeDialog?.dirty) return requestDiscard(() => { closeDialog(true); dispatchAction("logout"); });
       if (state.ui.settingsDirty) return requestSettingsDiscard(() => dispatchAction("logout"));
-      closePopover(); state.loggedIn = false; try { sessionStorage.removeItem(PROFILE_KEY); } catch {} persistWorkspace(); resetLoginFlow(); renderShell(); syncOverlayState(); document.getElementById("login-email")?.focus(); return;
+      closePopover(); state.loggedIn = false; try { sessionStorage.removeItem(PROFILE_KEY); } catch {} serverSyncLogout(); persistWorkspace(); resetLoginFlow(); renderShell(); syncOverlayState(); document.getElementById("login-email")?.focus(); return;
     }
   }
 }
 
+function deliveryItemQty(items, sku) {
+  if (!Array.isArray(items)) return 0;
+  const lines = items.filter((line) => line.sku === sku);
+  return lines.length === 1 && Number.isSafeInteger(lines[0].qty) && lines[0].qty >= 0 ? lines[0].qty : 0;
+}
+
+function deliveryAcceptedQty(delivery, sku) {
+  const issued = deliveryItemQty(delivery.items, sku);
+  return delivery.acceptedItems === undefined ? delivery.status === "delivered" ? issued : 0 : Math.min(issued, deliveryItemQty(delivery.acceptedItems, sku));
+}
+
+function deliveryOutstandingItems(delivery) {
+  return (delivery.items || []).map(({ sku }) => ({ sku, qty: deliveryItemQty(delivery.items, sku) - deliveryAcceptedQty(delivery, sku) })).filter(({ qty }) => qty > 0);
+}
+
+function deliveryAttempts(delivery) {
+  if (Array.isArray(delivery.attempts)) return delivery.attempts;
+  if (!delivery.resultRecordedAt) return [];
+  return [{ status: delivery.status === "delivered" ? "delivered" : "failed", scheduledAt: delivery.scheduledAt, resultReceivedAt: delivery.resultReceivedAt, resultRecordedAt: delivery.resultRecordedAt, acceptedItems: (delivery.items || []).map(({ sku }) => ({ sku, qty: deliveryAcceptedQty(delivery, sku) })), remainingItems: deliveryOutstandingItems(delivery), evidenceId: delivery.evidenceId, reason: delivery.note }];
+}
+
+function deliveryActionActor(action) {
+  const user = state.users.find((entry) => entry.id === state.activeUserId);
+  return state.loggedIn && user?.status === "user_active" && user.roleIds.includes(state.role) && guardAction(action) ? `${user.id}:${state.role}` : "";
+}
+
+function deliveryReturnKind(delivery) {
+  if (!delivery) return "";
+  if (["failed", "returned"].includes(delivery.status) || (delivery.status === "delivery_partial" && !delivery.retryClosedAt)) return "undelivered";
+  if (delivery.status === "delivered" || (delivery.status === "delivery_partial" && delivery.retryClosedAt)) return "customer";
+  return "";
+}
+
+function returnDeliveryCandidates(entry) {
+  if (!Number.isSafeInteger(entry.qty) || entry.qty <= 0) return [];
+  // Old returns could be opened after issue, even on a trip since retried or retired.
+  return state.deliveries.filter((delivery) => delivery.order === entry.order && (!entry.delivery || entry.delivery === delivery.code) && deliveryItemQty(delivery.items, entry.sku) >= entry.qty);
+}
+
+function deliveryReturns(delivery) {
+  return state.returns.filter((entry) => entry.order === delivery.order && entry.status !== "rejected" && (entry.delivery ? entry.delivery === delivery.code : returnDeliveryCandidates(entry).includes(delivery)));
+}
+
+function deliveryReturnRemaining(delivery, sku, exclude, kind = deliveryReturnKind(delivery)) {
+  // Reserve against each possible source when a legacy return cannot be attributed safely.
+  const used = deliveryReturns(delivery).filter((entry) => entry !== exclude && entry.sku === sku && (!entry.returnKind || entry.returnKind === kind)).reduce((sum, entry) => Number.isSafeInteger(entry.qty) && entry.qty > 0 ? sum + entry.qty : Infinity, 0);
+  const accepted = deliveryAcceptedQty(delivery, sku);
+  const limit = kind === "customer" ? accepted : kind === "undelivered" ? deliveryItemQty(delivery.items, sku) - accepted : 0;
+  return Math.max(0, limit - used);
+}
+
+function deliveryReturnBlock(delivery, allowPending = false) {
+  const returns = deliveryReturns(delivery);
+  if (delivery.retryClosedAt || delivery.status === "returned") return "Chuyến đã đóng sau khi nhập hoàn. Phần chưa giao cần giữ và xuất kho mới.";
+  if (delivery.returned || returns.some((entry) => entry.status === "completed" || entry.postedAt)) return "Không thể dùng lại chuyến đã nhập hoàn. Đối chiếu và nhập hoàn hết phần chưa giao trước khi xuất kho mới cho đợt này.";
+  if (returns.some((entry) => entry.status === "return_received" || (!allowPending && entry.status === "inspecting"))) return "Chuyến đang có yêu cầu hoàn hàng. Không thể bàn giao lại hoặc ghi nhận khách đã nhận hàng.";
+  return "";
+}
+
+function deliveryShipment(delivery) {
+  return delivery.contract && delivery.shipmentId ? contractByCode(delivery.contract)?.shipments?.find((item) => item.id === delivery.shipmentId) : undefined;
+}
+
+function deliveryTimestampField(label) {
+  return inputField("receivedAt", label, "datetime-local", new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16), "required");
+}
+
+function deliveryTimestamp(data) {
+  const value = String(data.get("receivedAt") || "");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return "";
+  const date = new Date(`${value}:00+07:00`);
+  if (!Number.isFinite(date.valueOf()) || date > new Date()) return "";
+  return new Date(date.valueOf() + 7 * 3600000).toISOString().slice(0, 16) === value ? date.toISOString() : "";
+}
+
+function deliveryEvidenceField(label, required = true) {
+  return inputField("evidence", label, "file", "", `${required ? "required " : ""}accept='.pdf,.jpg,.jpeg,.png'`);
+}
+
+async function storeDeliveryEvidence(file, code, current) {
+  const [attachment] = await storeAttachments([file], code);
+  if (current()) return attachment;
+  delete state.attachments[attachment.id];
+  if (!workspaceStatus.conflict) persistWorkspace();
+  formError("Hồ sơ, vai trò hoặc dữ liệu đã thay đổi trong lúc lưu chứng từ. Tải lại hồ sơ và thử lại.");
+  return null;
+}
+
 function showDeliveryResultForm(code, result) {
-  if (!["sales_staff", "sales_manager", "warehouse_manager"].includes(state.role)) return;
+  const actor = deliveryActionActor("delivery-result");
+  if (!actor || !["delivered", "delivery_partial", "failed"].includes(result)) return;
   const delivery = state.deliveries.find((item) => item.code === code);
   if (!delivery || delivery.status !== "shipping") return;
-  showForm(result === "delivered" ? "Xác nhận giao thành công" : "Ghi nhận giao thất bại", `${inputField("receivedAt", "Nhận xác nhận giao hàng lúc", "datetime-local", new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16), "required")}${result === "delivered" ? inputField("evidence", "Biên bản giao nhận có chữ ký", "file", "", "required accept='.pdf,.jpg,.jpeg,.png'") : inputField("reason", "Lý do giao thất bại", "text", "", "required maxlength=240")}`, async (data) => {
-    const receivedAt = new Date(`${data.get("receivedAt")}:00+07:00`);
-    if (!Number.isFinite(receivedAt.valueOf()) || receivedAt > new Date()) return formError("Thời điểm nhận xác nhận không được ở tương lai.");
-    if (result === "delivered") {
-      const file = data.get("evidence");
-      if (!file?.name) return formError("Chọn biên bản giao nhận có chữ ký.");
-      const [attachment] = await storeAttachments([file], code);
-      delivery.evidence = file.name;
-      delivery.evidenceId = attachment.id;
-    } else if (!data.get("reason").trim()) return formError("Cần nêu lý do thất bại.");
-    delivery.status = result; delivery.note = result === "failed" ? data.get("reason") : "Khách đã ký nhận đủ hàng";
-    delivery.resultReceivedAt = receivedAt.toISOString(); delivery.resultRecordedAt = new Date().toISOString();
-    const contract = delivery.contract ? contractByCode(delivery.contract) : null;
-    const shipment = contract?.shipments?.find((item) => item.id === delivery.shipmentId);
-    if (shipment) { shipment.status = result === "delivered" ? "delivered" : "failed"; shipment.confirmedAt = receivedAt.toISOString(); shipment.updatedAt = delivery.resultRecordedAt; }
+  const blocked = deliveryReturnBlock(delivery, result === "failed");
+  if (blocked) return toast(blocked, "warning");
+  const issued = delivery.items || [];
+  const items = deliveryOutstandingItems(delivery);
+  if (!items.length || issued.some(({ sku }) => !sku || deliveryItemQty(issued, sku) <= 0)) return toast("Phiếu xuất của chuyến giao thiếu số lượng SKU hợp lệ.", "warning");
+  const { scheduledAt, resultRecordedAt } = delivery;
+  const current = () => deliveryActionActor("delivery-result") === actor && state.deliveries.includes(delivery) && delivery.status === "shipping" && delivery.scheduledAt === scheduledAt && delivery.resultRecordedAt === resultRecordedAt && (!delivery.shipmentId || deliveryShipment(delivery)?.delivery === code) && !deliveryReturnBlock(delivery, result === "failed");
+  const quantities = items.map(({ sku, qty }, index) => inputField(`accepted-${index}`, `${sku} · xuất ${num(qty)} · khách thực nhận`, "number", "", `required min=0 max=${qty} step=1`)).join("");
+  const needsReason = result !== "delivered";
+  const needsProof = result !== "failed";
+  showForm(result === "delivered" ? "Xác nhận giao đủ phần còn lại" : result === "failed" ? "Ghi nhận giao thất bại" : "Ghi nhận giao một phần", `${deliveryTimestampField("Nhận xác nhận giao hàng lúc")}${needsProof ? deliveryEvidenceField("Biên bản giao nhận có chữ ký") : ""}${needsReason ? inputField("reason", "Lý do chưa nhận đủ", "text", "", "required maxlength=240") : ""}${quantities}<p class="small muted">Nhập số khách nhận trong lần giao này. Chuyến giao lại chỉ gồm phần chưa được nhận và chưa nhập hoàn.</p>`, async (data) => {
+    if (!current()) return formError("Chuyến giao đã thay đổi hoặc đang xử lý hoàn; không thể ghi kết quả.");
+    const receivedAt = deliveryTimestamp(data);
+    if (!receivedAt || (scheduledAt && Date.parse(receivedAt) + 60000 <= Date.parse(scheduledAt))) return formError("Thời điểm nhận xác nhận phải từ lúc bàn giao đến hiện tại.");
+    const acceptedNow = items.map(({ sku }, index) => {
+      const value = String(data.get(`accepted-${index}`) ?? "").trim();
+      return { sku, qty: value ? Number(value) : NaN };
+    });
+    if (acceptedNow.some(({ qty }, index) => !Number.isSafeInteger(qty) || qty < 0 || qty > items[index].qty)) return formError("Nhập số nguyên không âm và không vượt phần chưa giao ở từng SKU.");
+    const all = acceptedNow.every(({ qty }, index) => qty === items[index].qty), none = acceptedNow.every(({ qty }) => qty === 0);
+    if (result !== (all ? "delivered" : none ? "failed" : "delivery_partial")) return formError("Số lượng không khớp kết quả. Chọn giao đủ, giao một phần hoặc thất bại theo số thực nhận.");
+    const reason = String(data.get("reason") || "").trim();
+    if (needsReason && (!reason || reason.length > 240)) return formError("Cần nêu lý do chưa giao đủ.");
+    const file = data.get("evidence");
+    if (needsProof && !file?.name) return formError("Chọn biên bản giao nhận có chữ ký.");
+    const attachment = needsProof ? await storeDeliveryEvidence(file, code, current) : null;
+    if (needsProof && !attachment) return;
+
+    const attempts = deliveryAttempts(delivery);
+    const acceptedItems = issued.map(({ sku }) => ({ sku, qty: deliveryAcceptedQty(delivery, sku) + deliveryItemQty(acceptedNow, sku) }));
+    const status = all ? "delivered" : acceptedItems.some(({ qty }) => qty > 0) ? "delivery_partial" : "failed";
+    const recordedAt = new Date().toISOString();
+    Object.assign(delivery, { status, acceptedItems, note: all ? "Khách đã ký nhận đủ hàng" : reason, resultReceivedAt: receivedAt, resultRecordedAt: recordedAt });
+    if (attachment) Object.assign(delivery, { evidence: file.name, evidenceId: attachment.id });
+    const remainingItems = deliveryOutstandingItems(delivery);
+    delivery.attempts = [...attempts, { status: result, scheduledAt, resultReceivedAt: receivedAt, resultRecordedAt: recordedAt, acceptedItems: acceptedNow, remainingItems, evidenceId: attachment?.id, reason, actorId: state.activeUserId }];
+    const shipment = deliveryShipment(delivery);
+    if (shipment) Object.assign(shipment, { status, remainingItems, confirmedAt: receivedAt, updatedAt: recordedAt });
     const order = orderByCode(delivery.order);
-    if (order) order.status = result === "failed" ? "failed" : order.lines.every((line) => line.shipped >= line.qty) && state.deliveries.filter((item) => item.order === order.code).every((item) => item.status === "delivered") ? "completed" : "shipping";
-    addAudit("Cập nhật kết quả giao", code, delivery.note, result === "failed" ? "danger" : "success");
+    if (order && order.status !== "cancelled") {
+      const trips = state.deliveries.filter((item) => item.order === order.code);
+      const fulfilled = trips.every((item) => item.status === "delivered" || item.status === "returned" || item.retryClosedAt) && order.lines.every((line) => line.shipped === line.qty && trips.reduce((sum, item) => sum + deliveryAcceptedQty(item, line.sku), 0) === line.qty);
+      order.status = fulfilled ? "completed" : status === "failed" ? "failed" : "shipping";
+    }
+    addAudit("Cập nhật kết quả giao", code, `${delivery.note} · ${acceptedNow.map(({ sku, qty }) => `${sku}: ${qty}`).join(", ")}`, result === "failed" ? "danger" : result === "delivery_partial" ? "warning" : "success");
     closeDialog(); render(true); toast("Đã lưu kết quả giao nhận.");
   });
 }
 
-function showReturnInspection(code) {
-  if (state.role !== "warehouse_manager") return;
+function returnIsPosted(item) {
+  return item.status === "completed" || item.postedAt || state.movements.some((move) => move.type === "Hàng hoàn" && move.ref === item.code);
+}
+
+function recordReturnReceipt(item, receivedAt, receiptNote, evidenceId) {
+  Object.assign(item, { status: "return_received", receivedAt, receivedQty: item.qty, receiptRecordedAt: new Date().toISOString(), receiptActorId: state.activeUserId, receiptEvidenceId: evidenceId, receiptNote });
+  addAudit("Ghi nhận thực nhận hàng hoàn", item.code, `${item.delivery} · ${item.sku} · ${item.qty} · ${receiptNote}`);
+}
+
+function resolveReturnDelivery(item) {
+  const candidates = returnDeliveryCandidates(item);
+  return candidates.length === 1 && deliveryReturnKind(candidates[0]) && (!item.returnKind || item.returnKind === deliveryReturnKind(candidates[0])) ? candidates[0] : null;
+}
+
+function showReturnReceipt(code) {
+  const actor = deliveryActionActor("return-receive");
   const item = state.returns.find((entry) => entry.code === code);
-  if (!item || item.status !== "inspecting") return;
-  showForm("Kiểm tra hàng hoàn", `${inputField("receivedAt", "Hàng trả về thực tế lúc", "datetime-local", new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16), "required")}${selectField("condition", "Phân loại thực nhận", [["damaged", "Hư hỏng / chờ xử lý"], ["good", "Đủ điều kiện bán lại"]])}${inputField("reason", "Kết quả kiểm tra", "text", "", "required")}<div class="banner warning mt-16">Chỉ cập nhật tồn khi hàng đã trả về thực tế. Hàng hỏng không tăng tồn khả dụng.</div>`, (data) => {
-    if (stockLock()) return formError("Kho đang khóa kiểm kê. Hoàn tất kỳ trước khi xác nhận nhập hoàn.");
-    const product = productBySku(item.sku);
-    const receivedAt = new Date(`${data.get("receivedAt")}:00+07:00`);
-    if (!Number.isFinite(receivedAt.valueOf()) || receivedAt > new Date()) return formError("Thời điểm nhận hàng không được ở tương lai.");
-    product.physical += item.qty;
-    if (data.get("condition") === "damaged") product.damaged += item.qty;
-    item.status = "completed"; item.note = data.get("reason");
-    item.receivedAt = receivedAt.toISOString(); item.postedAt = new Date().toISOString();
-    addMovement("Hàng hoàn", item.sku, item.qty, product.physical, product.held, code, item.note);
-    addAudit("Xác nhận hàng hoàn", code, item.note, "success");
-    closeDialog(); render(true); toast("Đã ghi nhận hàng hoàn. Xử lý tiền cần Kế toán theo chính sách.");
+  if (!actor || !item || item.status !== "inspecting" || returnIsPosted(item)) return;
+  const delivery = resolveReturnDelivery(item);
+  if (!delivery) return toast("Không xác định được duy nhất chuyến hàng cần nhận hoàn. Đối chiếu hồ sơ trước khi tiếp tục.", "warning");
+  const current = () => deliveryActionActor("return-receive") === actor && state.returns.includes(item) && item.status === "inspecting" && !returnIsPosted(item) && resolveReturnDelivery(item) === delivery && item.qty <= deliveryReturnRemaining(delivery, item.sku, item);
+  showForm("Ghi nhận thực nhận hàng hoàn", `<p class="small muted">${escapeHtml(delivery.code)} · ${escapeHtml(item.sku)} · Yêu cầu: ${num(item.qty)}</p>${deliveryTimestampField("Hàng trả về thực tế lúc")}${inputField("qty", "Số thực nhận", "number", "", `required min=1 max=${item.qty} step=1`)}${inputField("note", "Căn cứ bàn giao / ghi chú kiểm đếm", "text", "", "required maxlength=240")}${deliveryEvidenceField("Phiếu bàn giao hoặc ảnh hàng thực nhận (nếu có)", false)}<p class="small muted">Không cập nhật tồn tại bước này. Nếu nhận thiếu, phần còn lại tiếp tục chờ nhận trên phiếu liên kết.</p>`, async (data) => {
+    if (!current()) return formError("Yêu cầu hoàn không còn đủ điều kiện nhận hàng hoặc đã thay đổi.");
+    const receivedAt = deliveryTimestamp(data), receivedQty = Number(data.get("qty")), receiptNote = String(data.get("note") || "").trim(), file = data.get("evidence");
+    if (!receivedAt || !Number.isSafeInteger(receivedQty) || receivedQty < 1 || receivedQty > item.qty || !receiptNote || receiptNote.length > 240) return formError("Nhập thời điểm thực nhận, số lượng hợp lệ và căn cứ bàn giao.");
+    const attachment = file?.name ? await storeDeliveryEvidence(file, code, current) : null;
+    if (file?.name && !attachment) return;
+    const returnKind = deliveryReturnKind(delivery), originalRequestedQty = item.qty;
+    if (receivedQty < originalRequestedQty) {
+      const remainder = { code: nextCode(state.returns, "code", `DT-${new Date().getFullYear()}-`, 4), order: item.order, customerId: item.customerId, delivery: delivery.code, returnKind, sku: item.sku, qty: originalRequestedQty - receivedQty, reason: item.reason, source: item.source, status: "inspecting", createdAt: todayText(), splitFrom: code, evidence: item.evidence || [], note: "Phần còn chờ nhận từ phiếu " + code };
+      state.returns.unshift(remainder);
+      Object.assign(item, { originalRequestedQty, remainderReturn: remainder.code, qty: receivedQty });
+    }
+    Object.assign(item, { delivery: delivery.code, returnKind });
+    recordReturnReceipt(item, receivedAt, receiptNote, attachment?.id);
+    closeDialog(); render(true); toast("Đã ghi nhận thực nhận; chưa thay đổi tồn kho.");
+  });
+}
+
+function showReturnInspection(code) {
+  const actor = deliveryActionActor("return-inspection");
+  const item = state.returns.find((entry) => entry.code === code);
+  if (!actor || !item || item.status !== "return_received" || returnIsPosted(item)) return;
+  const delivery = resolveReturnDelivery(item);
+  if (!delivery) return toast("Không xác định được duy nhất chuyến hàng đã nhận hoàn.", "warning");
+  showForm("Kiểm tra và nhập kho hàng hoàn", `<p class="small muted">${escapeHtml(delivery.code)} · ${escapeHtml(item.sku)} · Đã nhận ${num(item.receivedQty)} đơn vị</p>${inputField("good", "Số đủ điều kiện bán lại", "number", "", `required min=0 max=${item.qty} step=1`)}${inputField("damaged", "Số hư hỏng / chờ xử lý", "number", "", `required min=0 max=${item.qty} step=1`)}${inputField("reason", "Kết quả kiểm tra", "text", "", "required maxlength=240")}<div class="banner warning mt-16">Tổng số đã phân loại phải bằng thực nhận. Hàng hỏng không tăng tồn khả dụng.</div>`, (data) => {
+    if (deliveryActionActor("return-inspection") !== actor || !state.returns.includes(item) || item.status !== "return_received" || returnIsPosted(item)) return formError("Yêu cầu hoàn này đã xử lý hoặc đã thay đổi.");
+    if (stockLock(item.sku)) return formError("SKU đang khóa kiểm kê. Hoàn tất kỳ trước khi xác nhận nhập hoàn.");
+    if (resolveReturnDelivery(item) !== delivery || item.receivedQty !== item.qty || item.qty > deliveryReturnRemaining(delivery, item.sku, item)) return formError("Số lượng nhập hoàn không khớp với thực nhận và phần còn được hoàn trên chuyến này.");
+    const order = orderByCode(item.order), product = productBySku(item.sku);
+    const line = order?.lines.find((entry) => entry.sku === item.sku);
+    if (!line || !product) return formError("Hồ sơ hoàn không khớp sản phẩm của đơn hàng.");
+    const goodText = String(data.get("good") ?? "").trim(), damagedText = String(data.get("damaged") ?? "").trim();
+    const goodQty = Number(goodText), damagedQty = Number(damagedText), note = String(data.get("reason") || "").trim();
+    if (!goodText || !damagedText || ![goodQty, damagedQty].every((qty) => Number.isSafeInteger(qty) && qty >= 0) || goodQty + damagedQty !== item.qty || !note || note.length > 240) return formError("Nhập kết quả kiểm tra và phân loại đúng tổng số thực nhận.");
+    const undelivered = item.returnKind === "undelivered";
+    const previous = deliveryReturns(delivery).filter((entry) => entry !== item && (!entry.returnKind || entry.returnKind === "undelivered") && returnIsPosted(entry));
+    const remainingItems = deliveryOutstandingItems(delivery);
+    const shipment = deliveryShipment(delivery);
+    if (undelivered && (!Number.isSafeInteger(line.shipped) || line.shipped - item.qty < state.deliveries.filter((entry) => entry.order === order.code).reduce((sum, entry) => sum + deliveryAcceptedQty(entry, item.sku), 0))) return formError("Lượng đã xuất của đơn không khớp hàng chưa giao được trả về.");
+    if (undelivered && previous.some((entry) => !delivery.returned || entry.delivery !== delivery.code || entry.status !== "completed")) return formError("Có hàng hoàn cũ chưa đối chiếu lượng đã xuất. Không thể tự động nhập tiếp cho chuyến này.");
+    if (undelivered && delivery.shipmentId && shipment?.delivery !== delivery.code) return formError("Đợt giao hợp đồng không còn khớp chuyến trả về. Cần đối chiếu trước khi nhập.");
+    const fullyReturned = undelivered && remainingItems.every(({ sku, qty }) => qty === (sku === item.sku ? item.qty : 0) + previous.filter((entry) => entry.sku === sku).reduce((sum, entry) => sum + entry.qty, 0));
+    const physical = product.physical + item.qty, damaged = product.damaged + damagedQty;
+    if (![physical, damaged, product.held].every((qty) => Number.isSafeInteger(qty) && qty >= 0) || product.held + damaged > physical) return formError("Số dư tồn kho không hợp lệ; cần đối chiếu trước khi nhập hoàn.");
+
+    const postedAt = new Date().toISOString();
+    Object.assign(product, { physical, damaged });
+    Object.assign(item, { status: "completed", condition: goodQty && damagedQty ? "mixed" : goodQty ? "good" : "damaged", goodQty, damagedQty, note, postedAt, postedBy: state.activeUserId });
+    Object.assign(delivery, { returned: true, returnedAt: postedAt });
+    if (undelivered) {
+      line.shipped -= item.qty;
+      if (order.status !== "cancelled") order.status = order.lines.some((entry) => entry.held > 0) ? "holding" : orderEligible(order) ? "eligible" : "pending_payment";
+      if (fullyReturned) {
+        if (delivery.status === "failed") delivery.status = "returned";
+        delivery.retryClosedAt = postedAt;
+        if (shipment) Object.assign(shipment, { status: "planned", remainingItems, delivery: "", confirmedAt: "", updatedAt: postedAt });
+      }
+      syncIssueReadiness(order);
+    }
+    addMovement("Hàng hoàn", item.sku, item.qty, physical, product.held, code, `${note} · Đạt ${goodQty}, lỗi ${damagedQty}`);
+    addAudit("Xác nhận hàng hoàn", code, `${delivery.code} · ${note}`, "success");
+    closeDialog(); render(true); toast(undelivered ? "Đã nhập hoàn phần chưa giao. Không dùng lại chuyến cũ; hàng giao tiếp cần giữ và xuất mới." : "Đã ghi nhận hàng hoàn; không thay đổi số lượng đã giao của đơn.");
+  });
+}
+
+function showReturnResolutionEvidence(code, track) {
+  if (!["finance", "replacement"].includes(track)) return;
+  const action = `return-${track}-evidence`;
+  const actor = deliveryActionActor(action);
+  const item = state.returns.find((entry) => entry.code === code);
+  if (!actor || item?.status !== "completed") return;
+  const title = track === "finance" ? "hồ sơ tiền / công nợ" : "hồ sơ đổi bù";
+  showForm(`Lưu chứng từ ${title}`, `<p class="small muted">Chỉ lưu căn cứ của phương án đã được người có thẩm quyền quyết định bên ngoài bước này. Không phê duyệt, ghi tiền, tạo đơn đổi bù hoặc xuất kho.</p>${inputField("reference", "Số quyết định / chứng từ đã kiểm tra", "text", "", "required maxlength=120")}${inputField("note", "Kết quả đối chiếu", "text", "", "required maxlength=240")}${deliveryEvidenceField("Tệp chứng từ đã kiểm tra")}`, async (data) => {
+    const reference = String(data.get("reference") || "").trim(), note = String(data.get("note") || "").trim(), file = data.get("evidence");
+    const current = () => deliveryActionActor(action) === actor && state.returns.includes(item) && item.status === "completed" && !(item.resolutionEvidence || []).some((entry) => entry.track === track && entry.reference.toLowerCase() === reference.toLowerCase());
+    if (!current() || !reference || reference.length > 120 || !note || note.length > 240 || !file?.name) return formError("Cần vai trò đúng, chứng từ chưa lưu, mã tham chiếu và kết quả đối chiếu.");
+    const attachment = await storeDeliveryEvidence(file, code, current);
+    if (!attachment) return;
+    (item.resolutionEvidence ||= []).push({ track, reference, note, evidenceId: attachment.id, actorId: state.activeUserId, actorRole: state.role, recordedAt: new Date().toISOString() });
+    addAudit(`Lưu chứng từ ${title}`, code, `${reference} · ${note}`);
+    closeDialog(); render(true); toast("Đã lưu chứng từ; không tạo giao dịch tiền hoặc tồn kho.");
   });
 }

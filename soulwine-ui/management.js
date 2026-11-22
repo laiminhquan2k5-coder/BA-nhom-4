@@ -2,10 +2,12 @@ Object.assign(ACTION_ROLES, {
   "new-product": ["director", "sales_manager"], "edit-product": ["director", "sales_manager"],
   "new-supplier": ["director", "warehouse_manager"], "edit-customer": ["director", "sales_manager", "sales_staff"],
   "opening-stock": ["warehouse_manager"], "new-purchase-request": ["warehouse_manager"],
-  "create-po": ["warehouse_manager"], "create-receipt": ["warehouse_manager"],
+  "create-po": ["warehouse_manager"], "create-receipt": ["warehouse_manager", "warehouse_staff"], "create-basic-receipt": ["warehouse_manager"],
+  "redeliver-po": ["warehouse_manager", "warehouse_staff"], "record-supplier-payment": ["accountant"], "record-purchase-cost": ["accountant"],
   "create-wholesale-order": ["sales_manager", "sales_staff"], "schedule-delivery": ["sales_manager", "sales_staff", "warehouse_manager"],
   "new-return": ["sales_manager", "sales_staff"], "restore-backup": ["director"], "clear-workspace": ["director"],
-  "reset-user-password": ["director"], "unlock-account": ["director"], "change-password": ALL_ROLES
+  "reset-user-password": ["director"], "unlock-account": ["director"], "change-password": ALL_ROLES,
+  "connect-sync": ALL_ROLES, "disconnect-sync": ALL_ROLES
 });
 
 function settingsPage() {
@@ -21,8 +23,9 @@ function settingsPage() {
   const notifications = `<div class="settings-section"><div class="settings-description"><h2>Trung tâm thông báo</h2><p>Điều khiển các thông báo trong ứng dụng. Những mục đã tắt sẽ được loại khỏi danh sách thông báo; không gửi email hoặc tin nhắn.</p></div><div class="settings-options">${[["shipment", "Đợt giao sắp đến hạn", "Cảnh báo ngày giao đã đến và quá hạn."], ["quote", "Hiệu lực báo giá", "Nhắc trước hạn theo số ngày đã cấu hình."], ["approval", "Hồ sơ chờ xác nhận", "Chỉ hiển thị hồ sơ thuộc vai trò đang sử dụng."], ["stock", "Tồn kho dưới định mức", "Theo dõi tồn khả dụng của sản phẩm đang kinh doanh."], ["payment", "Đối chiếu thanh toán", "Theo dõi các giao dịch chưa được xác nhận."]].map(([name, label, text]) => `<label class="setting-switch"><span><strong>${label}</strong><small>${text}</small></span><input type="checkbox" name="${name}" ${settings.notifications[name] ? "checked" : ""}><span class="switch-track" aria-hidden="true"></span></label>`).join("")}</div></div>`;
   const display = `<div class="settings-section"><div class="settings-description"><h2>Trải nghiệm làm việc</h2><p>Tối ưu mật độ hiển thị và số dòng cho bảng dữ liệu trên thiết bị hiện tại.</p></div><div class="form-grid">${selectField("density", "Mật độ hiển thị", [["comfortable", "Thoáng · phù hợp thao tác cảm ứng"], ["compact", "Gọn · ưu tiên bảng dữ liệu"]], settings.display.density)}${selectField("pageSize", "Số bản ghi mỗi trang", [[10, "10 bản ghi"], [25, "25 bản ghi"], [50, "50 bản ghi"]], settings.display.pageSize)}</div><div class="settings-preview mt-24"><span class="chip accent">SoulWine</span><strong>Rõ ràng trong từng chi tiết</strong><p>Ngôn ngữ: Tiếng Việt · Tiền tệ: VND · Múi giờ: Asia/Ho_Chi_Minh</p></div></div>`;
   const bytes = new Blob([JSON.stringify(workspaceData())]).size;
-  const data = `<div class="settings-section"><div class="settings-description"><h2>Lưu trữ trên thiết bị</h2><p>Dữ liệu và tệp đính kèm được lưu trong trình duyệt hiện tại. Không có đồng bộ nhiều thiết bị. Xóa dữ liệu trình duyệt có thể làm mất dữ liệu; nên tải bản sao lưu định kỳ.</p></div><div class="storage-summary"><span>${icon("shield")}</span><div><strong>${(bytes / 1024).toFixed(1)} KB đang sử dụng</strong><small>${workspaceStatus.savedAt ? `Lưu gần nhất ${new Date(workspaceStatus.savedAt).toLocaleString("vi-VN")}` : "Chưa lưu trên thiết bị"}</small></div><span class="chip ${workspaceStatus.error ? "danger" : "success"}">${workspaceStatus.error ? "Cần kiểm tra" : "Đang hoạt động"}</span></div><div class="settings-actions"><div><h3>Sao lưu dữ liệu</h3><p>Tải tệp JSON gồm danh mục, giao dịch, cấu hình và tệp đính kèm trên thiết bị.</p></div><button class="btn btn-secondary" type="button" data-action="backup-workspace">${icon("download")} Tải bản sao lưu</button></div><div class="settings-actions"><div><h3>Khôi phục từ bản sao lưu</h3><p>Kiểm tra dữ liệu và xác nhận trước khi thay thế không gian làm việc hiện tại.</p></div><button class="btn btn-secondary" type="button" data-action="restore-backup" ${admin ? "" : "disabled"}>${icon("upload")} Chọn tệp JSON</button></div><div class="settings-actions danger-zone"><div><h3>Xóa dữ liệu nghiệp vụ</h3><p>Giữ lại nhân sự và cấu hình; xóa danh mục, giao dịch và tệp đính kèm. Cần nhập nội dung xác nhận.</p></div><button class="btn btn-danger" type="button" data-action="clear-workspace" ${admin ? "" : "disabled"}>Xóa dữ liệu</button></div></div>`;
-  const content = { organization, rules, notifications, display, data }[tab];
+  const data = `<div class="settings-section"><div class="settings-description"><h2>Lưu trữ trên thiết bị</h2><p>Dữ liệu và tệp đính kèm được lưu trong trình duyệt hiện tại. Không có đồng bộ nhiều thiết bị. Xóa dữ liệu trình duyệt có thể làm mất dữ liệu; nên tải bản sao lưu định kỳ.</p></div><div class="storage-summary"><span>${icon("shield")}</span><div><strong>${(bytes / 1024).toFixed(1)} KB đang sử dụng</strong><small>${workspaceStatus.savedAt ? `Lưu gần nhất ${new Date(workspaceStatus.savedAt).toLocaleString("vi-VN")}` : "Chưa lưu trên thiết bị"}</small></div><span class="chip ${workspaceStatus.error ? "danger" : "success"}">${workspaceStatus.error ? "Cần kiểm tra" : "Đang hoạt động"}</span></div><div class="settings-actions"><div><h3>Sao lưu dữ liệu</h3><p>Tải tệp JSON gồm danh mục, giao dịch, cấu hình và tệp đính kèm trên thiết bị.</p></div><button class="btn btn-secondary" type="button" data-action="backup-workspace">${icon("download")} Tải bản sao lưu</button></div><div class="settings-actions"><div><h3>Khôi phục từ bản sao lưu</h3><p>Kiểm tra dữ liệu và xác nhận trước khi thay thế không gian làm việc hiện tại.</p></div><button class="btn btn-secondary" type="button" data-action="restore-backup" ${admin ? "" : "disabled"}>${icon("upload")} Chọn tệp JSON</button></div><div class="settings-actions"><div><h3>Dữ liệu dùng chung qua máy chủ</h3><p>Kết nối SoulWine API để các bộ phận dùng chung một nguồn dữ liệu. Kết nối dùng email và mật khẩu đã đăng nhập trên thiết bị này để xác thực với máy chủ một lần; mật khẩu không lưu thêm vào đâu. Khi kết nối, bản dữ liệu máy chủ thay thế dữ liệu cục bộ; nếu máy chủ còn trống, dữ liệu cục bộ được tải lên. Phân quyền nghiệp vụ vẫn theo vai trò đang dùng.</p><div class="form-grid mt-12">${inputField("syncUrl", "Địa chỉ máy chủ API", "text", serverSync.baseUrl || "http://127.0.0.1:8787", "maxlength=200 data-sync-field=1")}</div><div class="mt-12"><small class="muted">${escapeHtml(serverSyncStatusLine().text)}</small></div></div><div class="flex gap-8 flex-wrap"><button class="btn btn-secondary" type="button" data-action="disconnect-sync" ${serverSync.enabled ? "" : "disabled"}>Ngắt kết nối</button><button class="btn btn-primary" type="button" data-action="connect-sync">${icon("upload")} Kết nối máy chủ</button></div></div><div class="settings-actions danger-zone"><div><h3>Xóa dữ liệu nghiệp vụ</h3><p>Giữ lại nhân sự và cấu hình; xóa danh mục, giao dịch và tệp đính kèm. Cần nhập nội dung xác nhận.</p></div><button class="btn btn-danger" type="button" data-action="clear-workspace" ${admin ? "" : "disabled"}>Xóa dữ liệu</button></div></div>`;
+  const stocktakeRules = `<div class="settings-options mt-24"><label class="setting-switch"><span><strong>Cho phép Thủ kho hủy kỳ kiểm kê</strong><small>Mặc định tắt. Chỉ bật khi SoulWine đã phê chuẩn thủ tục và quyền hủy. Hủy yêu cầu lý do, lưu số đã đếm và không điều chỉnh tồn.</small></span><input type="checkbox" name="allowStocktakeCancellation" ${settings.rules.allowStocktakeCancellation === true ? "checked" : ""}><span class="switch-track" aria-hidden="true"></span></label></div>`;
+  const content = { organization, rules: rules + stocktakeRules, notifications, display, data }[tab];
   const editable = !["organization", "rules"].includes(tab) || admin;
   return `${pageHead({ title: "Cài đặt không gian làm việc", subtitle: "Cấu hình thống nhất cho doanh nghiệp và trải nghiệm trên thiết bị." })}<div class="card settings-card">${tabsBar("settings", tabs, tab)}<form id="settings-form" class="card-body" novalidate>${!editable ? '<div class="banner info mb-24">Bạn có thể xem cấu hình. Chỉ Giám đốc được thay đổi thông tin doanh nghiệp và quy tắc vận hành.</div>' : ""}<fieldset ${editable ? "" : "disabled"}>${content}</fieldset><div class="banner danger hidden mt-16" id="settings-error" role="alert"></div>${tab !== "data" ? `<div class="settings-footer"><span id="settings-save-note">Thay đổi được lưu trên trình duyệt hiện tại.</span><div class="flex gap-8"><button class="btn btn-secondary" type="button" data-action="discard-settings">Hủy thay đổi</button><button class="btn btn-primary" type="submit" ${editable ? "" : "disabled"}>${icon("check")} Lưu cấu hình</button></div></div>` : ""}</form></div>`;
 }
@@ -33,6 +36,7 @@ function saveSettings(form) {
   const data = new FormData(form);
   if (!form.reportValidity()) return;
   const settings = structuredClone(state.settings);
+  let auditDetail = "Đã lưu thay đổi cấu hình";
   const error = (text) => { const element = document.getElementById("settings-error"); element.textContent = text; element.classList.remove("hidden"); };
   if (tab === "organization") {
     ["name", "taxId", "address", "representative", "phone", "email"].forEach((key) => settings.organization[key] = String(data.get(key)).trim());
@@ -40,6 +44,7 @@ function saveSettings(form) {
     if (settings.organization.taxId && !/^\d{10}(?:-?\d{3})?$/.test(settings.organization.taxId)) return error("Mã số thuế gồm 10 hoặc 13 chữ số.");
   }
   if (tab === "rules") {
+    if (!state.loggedIn || workspaceStatus.conflict) return;
     for (const [key, min, max, optional] of [["receiptTolerance", 0, 100, true], ["quoteValidityDays", 1, 365, false], ["holdDays", 1, 365, true], ["approvalHours", 1, 720, true], ["quoteReminderDays", 0, 30, false], ["shipmentReminderDays", 0, 30, false]]) {
       const value = data.get(key);
       if (value === "" && optional) settings.rules[key] = null;
@@ -48,12 +53,14 @@ function saveSettings(form) {
     }
     if (data.get("workStart") >= data.get("workEnd")) return error("Giờ kết thúc phải sau giờ bắt đầu làm việc.");
     settings.rules.workStart = data.get("workStart"); settings.rules.workEnd = data.get("workEnd");
+    settings.rules.allowStocktakeCancellation = data.has("allowStocktakeCancellation");
+    if (settings.rules.allowStocktakeCancellation !== (state.settings.rules.allowStocktakeCancellation === true)) auditDetail += settings.rules.allowStocktakeCancellation ? " · Bật quyền hủy kỳ kiểm kê cho Thủ kho" : " · Tắt quyền hủy kỳ kiểm kê cho Thủ kho";
   }
   if (tab === "notifications") Object.keys(settings.notifications).forEach((key) => settings.notifications[key] = data.has(key));
   if (tab === "display") { settings.display.density = data.get("density"); settings.display.pageSize = Number(data.get("pageSize")); }
   state.settings = settings;
   state.ui.settingsDirty = false;
-  addAudit("Cập nhật cấu hình", tab, "Đã lưu thay đổi cấu hình");
+  addAudit("Cập nhật cấu hình", tab, auditDetail);
   render(true); toast("Đã lưu cấu hình.");
 }
 
@@ -75,13 +82,14 @@ function showProductForm(sku) {
 }
 
 function showOpeningStock() {
-  if (stockLock()) return toast("Kho đang khóa kiểm kê.", "warning");
   const products = state.products.filter((product) => !state.movements.some((move) => move.sku === product.sku) && product.physical === 0);
   if (!products.length) return toast("Không có sản phẩm chưa phát sinh biến động. Dùng phiếu tiếp nhận để nhập thêm.", "info");
-  showForm("Ghi nhận tồn đầu kỳ", `<div class="banner warning mb-16">Chỉ áp dụng một lần cho SKU chưa có biến động kho. Không thay thế quy trình nhập hàng từ nhà cung cấp.</div>${selectField("sku", "Sản phẩm", products.map((product) => [product.sku, product.name]))}${inputField("qty", "Số lượng thực tế", "number", "", "required min=1 step=1")}${inputField("reference", "Biên bản / chứng từ nguồn", "text", "", "required maxlength=120")}`, (data) => {
+  const unlocked = products.filter((product) => !stockLock(product.sku));
+  if (!unlocked.length) return toast("Tất cả SKU đủ điều kiện đang bị khóa kiểm kê.", "warning");
+  showForm("Ghi nhận tồn đầu kỳ", `<div class="banner warning mb-16">Chỉ áp dụng một lần cho SKU chưa có biến động kho. Không thay thế quy trình nhập hàng từ nhà cung cấp.</div>${selectField("sku", "Sản phẩm", unlocked.map((product) => [product.sku, product.name]))}${inputField("qty", "Số lượng thực tế", "number", "", "required min=1 step=1")}${inputField("reference", "Biên bản / chứng từ nguồn", "text", "", "required maxlength=120")}`, (data) => {
     const product = productBySku(data.get("sku"));
     const qty = Number(data.get("qty"));
-    if (stockLock() || product.physical || state.movements.some((move) => move.sku === product.sku)) return formError("Sản phẩm đã có biến động hoặc kho đang bị khóa. Kiểm tra lại dữ liệu.");
+    if (!guardAction("opening-stock") || !product || stockLock(product.sku) || product.physical || state.movements.some((move) => move.sku === product.sku)) return formError("Sản phẩm đã có biến động hoặc SKU đang bị khóa. Kiểm tra lại dữ liệu.");
     if (!Number.isSafeInteger(qty) || qty <= 0) return formError("Nhập số lượng nguyên dương.");
     product.physical = qty;
     addMovement("Nhập kho", product.sku, qty, qty, 0, data.get("reference"), "Số dư đầu kỳ");
@@ -144,14 +152,34 @@ function updateCartSummary() {
   try { const cart = readCart(new FormData(form), !!form.dataset.purchase); element.textContent = `${cart.length} dòng hàng · Tổng ${money(cart.reduce((sum, line) => sum + line.qty * line.price, 0))}. ${form.dataset.purchase ? "Cần Kế toán và Giám đốc phê duyệt." : "Thu đủ 100% trước khi giữ/xuất."}`; } catch { element.textContent = "Hoàn thiện sản phẩm, số lượng và đơn giá của từng dòng."; }
 }
 
+function purchaseEvidenceField(label) {
+  return field("evidence", label, `<input class="input" id="form-evidence" name="evidence" type="file" required accept=".pdf,.jpg,.jpeg,.png">`, "PDF/JPG/PNG tối đa 2 MB.");
+}
+
+async function savePurchaseEvidence(file, reference, stillCurrent) {
+  if (!file.size) throw new Error("Tệp chứng từ đang trống.");
+  const [attachment] = await storeAttachments([file], reference);
+  if (stillCurrent()) return attachment;
+  delete state.attachments[attachment.id];
+  persistWorkspace();
+  throw new Error("Hồ sơ đã thay đổi trong lúc lưu chứng từ. Mở lại hồ sơ và thử lại.");
+}
+
 function showPurchaseRequestForm() {
   if (!state.products.length || !state.suppliers.length) return toast("Thêm sản phẩm và nhà cung cấp trước khi lập yêu cầu mua.", "info");
-  showForm("Lập yêu cầu mua hàng", `<div class="form-grid">${selectField("supplier", "Nhà cung cấp", state.suppliers.map((supplier) => [supplier.id, supplier.name]))}${inputField("needed", "Ngày cần hàng", "date", isoDate(todayText()), "required")}${inputField("note", "Lý do mua hàng", "text", "", "required")}</div><div class="section-heading mt-24"><h3>Chi tiết đề xuất</h3><button type="button" class="btn btn-secondary btn-sm" data-action="add-cart-row" data-purchase="true">Thêm dòng</button></div><div id="cart-lines">${lineEditorRow(0, true)}</div><div class="banner info mt-16" id="cart-summary"></div>`, (data) => {
+  showForm("Lập yêu cầu mua hàng", `<div class="form-grid">${selectField("supplier", "Nhà cung cấp", state.suppliers.map((supplier) => [supplier.id, supplier.name]))}${inputField("needed", "Ngày cần hàng", "date", isoDate(todayText()), "required")}${inputField("note", "Lý do mua hàng", "text", "", "required")}${purchaseEvidenceField("Báo giá của nhà cung cấp")}</div><div class="section-heading mt-24"><h3>Chi tiết đề xuất</h3><button type="button" class="btn btn-secondary btn-sm" data-action="add-cart-row" data-purchase="true">Thêm dòng</button></div><div id="cart-lines">${lineEditorRow(0, true)}</div><div class="banner info mt-16" id="cart-summary"></div>`, async (data) => {
     let cart;
     try { cart = readCart(data, true); } catch (error) { return formError(error.message); }
-    const request = { code: nextCode(state.purchaseRequests, "code", `YCM-${new Date().getFullYear()}-`), supplier: data.get("supplier"), requester: currentUser().name, createdAt: todayText(), needed: displayDate(data.get("needed")), status: "pending", amount: cart.reduce((sum, line) => sum + line.qty * line.price, 0), lines: cart, note: data.get("note"), approvals: { accountant: false, director: false } };
+    const supplier = data.get("supplier"), file = data.get("evidence"), note = data.get("note").trim();
+    const amount = cart.reduce((sum, line) => sum + line.qty * line.price, 0);
+    if (!file?.name) return formError("Đính kèm báo giá của nhà cung cấp trước khi gửi duyệt.");
+    if (!guardAction("new-purchase-request") || !note || !state.suppliers.some((item) => item.id === supplier) || !Number.isSafeInteger(amount)) return formError("Kiểm tra nhà cung cấp, lý do mua và tổng giá trị đề xuất.");
+    const code = nextCode(state.purchaseRequests, "code", `YCM-${new Date().getFullYear()}-`);
+    const dialog = activeDialog;
+    const attachment = await savePurchaseEvidence(file, code, () => activeDialog === dialog && guardAction("new-purchase-request") && !state.purchaseRequests.some((item) => item.code === code));
+    const request = { code, supplier, requester: currentUser().name, createdAt: todayText(), needed: displayDate(data.get("needed")), status: "pending", amount, lines: cart, note, quoteAttachmentId: attachment.id, approvals: { accountant: false, director: false } };
     state.purchaseRequests.unshift(request);
-    ["accountant", "director"].forEach((role) => state.approvals.unshift({ id: nextCode(state.approvals, "id", "AP-", 4), type: "purchase", ref: request.code, title: role === "accountant" ? "Kiểm tra tài chính mua hàng" : "Phê duyệt yêu cầu mua", assignee: role, status: "pending", createdAt: nowStamp(), age: "Vừa gửi", requester: currentUser().name, amount: request.amount, summary: request.note, lines: structuredClone(cart), evidence: [] }));
+    ["accountant", "director"].forEach((role) => state.approvals.unshift({ id: nextCode(state.approvals, "id", "AP-", 4), type: "purchase", ref: request.code, title: role === "accountant" ? "Kiểm tra tài chính mua hàng" : "Phê duyệt yêu cầu mua", assignee: role, status: "pending", createdAt: nowStamp(), age: "Vừa gửi", requester: currentUser().name, amount: request.amount, summary: request.note, lines: structuredClone(cart), evidence: [attachment.name] }));
     addAudit("Gửi duyệt yêu cầu mua", request.code, money(request.amount));
     closeDialog(); render(true); toast("Đã gửi yêu cầu đến Kế toán và Giám đốc.");
   }, { drawer: false, submitLabel: "Gửi phê duyệt", input: () => updateCartSummary() });
@@ -159,26 +187,92 @@ function showPurchaseRequestForm() {
 }
 
 function showPurchaseOrderForm(code) {
-  const requests = state.purchaseRequests.filter((request) => request.status === "approved" && !state.purchaseOrders.some((order) => order.request === request.code));
+  const available = (request) => request?.status === "approved" && !state.purchaseOrders.some((order) => order.request === request.code);
+  const requests = state.purchaseRequests.filter(available);
   if (!requests.length) return toast("Chưa có yêu cầu đủ hai phê duyệt và chưa lập đơn đặt hàng.", "info");
   showForm("Lập đơn đặt hàng", `${selectField("request", "Yêu cầu mua đã duyệt", requests.map((request) => [request.code, `${request.code} · ${supplierName(request.supplier)}`]), code)}${inputField("receiveDate", "Ngày nhận dự kiến", "date", isoDate(todayText()), "required")}${inputField("terms", "Điều khoản thanh toán", "text", "", "required")}`, (data) => {
     const request = state.purchaseRequests.find((item) => item.code === data.get("request"));
+    if (!guardAction("create-po") || !available(request)) return formError("Yêu cầu mua không còn đủ điều kiện lập đơn đặt hàng.");
     const order = { code: nextCode(state.purchaseOrders, "code", `PO-${new Date().getFullYear()}-`), supplier: request.supplier, request: request.code, createdAt: todayText(), receiveDate: displayDate(data.get("receiveDate")), amount: request.amount, status: "receiving", receipt: "", terms: data.get("terms"), lines: structuredClone(request.lines) };
     state.purchaseOrders.unshift(order); addAudit("Lập đơn đặt hàng", order.code, request.code);
     closeDialog(); navigate("purchase-orders"); toast("Đã lập đơn đặt hàng.");
   });
 }
 
-function showReceiptForm(code) {
-  const orders = state.purchaseOrders.filter((order) => !order.receipt && order.status !== "cancelled");
-  if (!orders.length) return toast("Chưa có đơn đặt hàng cần tiếp nhận.", "info");
-  showForm("Tạo phiếu tiếp nhận", selectField("order", "Đơn đặt hàng", orders.map((order) => [order.code, `${order.code} · ${supplierName(order.supplier)}`]), code), (data) => {
-    const order = state.purchaseOrders.find((item) => item.code === data.get("order"));
-    const receipt = { code: nextCode(state.receipts, "code", `PN-${new Date().getFullYear()}-`), po: order.code, supplier: order.supplier, eta: order.receiveDate, status: "receiving", owner: currentUser().name, lines: order.lines.map((line) => ({ sku: line.sku, ordered: line.qty, received: 0, good: 0, damaged: 0, counted: false })), evidence: [], note: "" };
-    state.receipts.unshift(receipt); order.receipt = receipt.code;
-    addAudit("Tạo phiếu tiếp nhận", receipt.code, order.code);
+function canStartPoReceipt(order, refused = null) {
+  if (!order || !order.lines?.length) return false;
+  const attempts = state.receipts.filter((receipt) => receipt.po === order.code && !receipt.source);
+  return refused ? order.status === "returned" && order.receipt === refused.code && refused.status === "returned" && attempts.includes(refused) && attempts.every((receipt) => receipt.status === "returned")
+    : order.status === "receiving" && !order.receipt && !attempts.length;
+}
+
+function showReceiptForm(code, previousCode) {
+  const action = previousCode ? "redeliver-po" : "create-receipt";
+  if (!guardAction(action)) return;
+  const previous = previousCode && receiptByCode(previousCode);
+  const orders = state.purchaseOrders.filter((order) => previousCode ? order.code === code && previous && canStartPoReceipt(order, previous) : canStartPoReceipt(order));
+  if (!orders.length || (code && !orders.some((order) => order.code === code))) return toast("Đơn đặt hàng không còn có thể mở phiếu tiếp nhận mới.", "info");
+  const fields = previous ? `<p class="small mb-16">${escapeHtml(code)} · Giao lại sau phiếu ${escapeHtml(previous.code)}. Kiểm đếm và đính kèm chứng từ mới; phiếu đã trả lô được giữ nguyên.</p>${inputField("eta", "Ngày nhận lô giao lại", "date", isoDate(todayText()), "required")}`
+    : selectField("order", "Đơn đặt hàng", orders.map((order) => [order.code, `${order.code} · ${supplierName(order.supplier)}`]), code);
+  showForm(previous ? "Tiếp nhận lô giao lại" : "Tạo phiếu tiếp nhận", fields, (data) => {
+    const order = state.purchaseOrders.find((item) => item.code === (previous ? code : data.get("order")));
+    if (!guardAction(action) || !canStartPoReceipt(order, previous)) return formError("Đơn đặt hàng đã thay đổi hoặc đã có phiếu tiếp nhận.");
+    const receipt = { code: nextCode(state.receipts, "code", `PN-${new Date().getFullYear()}-`), po: order.code, supplier: order.supplier, eta: previous ? displayDate(data.get("eta")) : order.receiveDate, status: "receiving", owner: currentUser().name, lines: order.lines.map((line) => ({ sku: line.sku, ordered: line.qty, received: null, good: null, damaged: null, counted: false })), evidence: [], note: "" };
+    if (previous) receipt.previousReceipt = previous.code;
+    state.receipts.unshift(receipt); order.receipt = receipt.code; order.status = "receiving";
+    addAudit(previous ? "Tiếp nhận lô giao lại" : "Tạo phiếu tiếp nhận", receipt.code, previous ? `${order.code} · sau phiếu ${previous.code}` : order.code);
     closeDialog(); navigate(`receipts/${receipt.code}`);
   }, { submitLabel: "Tạo phiếu" });
+}
+
+function showPurchaseFinanceForm(code, adjustment = false) {
+  const action = adjustment ? "record-purchase-cost" : "record-supplier-payment";
+  if (!guardAction(action)) return;
+  const receipt = adjustment ? receiptByCode(code) : null;
+  const order = state.purchaseOrders.find((item) => item.code === (adjustment ? receipt?.po : code));
+  const canRecord = () => order && state.purchaseOrders.includes(order) && (!adjustment || (receiptByCode(code) === receipt && purchaseCostReceipt(order) === receipt && !receipt.costAdjustment));
+  if (!canRecord()) return toast("Không tìm thấy hồ sơ mua hàng cần ghi nhận.", "warning");
+  const title = adjustment ? "Ghi nhận điều chỉnh chi phí" : "Đối chiếu thanh toán nhà cung cấp";
+  const amount = inputField("amount", adjustment ? "Mức tăng / giảm chi phí đã xác minh (VND)" : "Số tiền thực tế đã trả (VND)", "number", "", adjustment ? "required step=1" : "required min=1 step=1") + (adjustment ? '<p class="hint">Nhập số có dấu; nhập 0 nếu đã đối chiếu và không có điều chỉnh.</p>' : "");
+  const details = adjustment ? inputField("note", "Căn cứ điều chỉnh đã đối chiếu", "text", "", "required maxlength=240") : inputField("date", "Ngày thực tế thanh toán", "date", isoDate(todayText()), `required max=${isoDate(todayText())}`);
+  showForm(title, `<div class="banner info mb-16"><div><strong>${escapeHtml(order.code)} · ${escapeHtml(supplierName(order.supplier))}</strong><div>${adjustment ? `Phiếu nhập đã xác nhận: ${escapeHtml(receipt.code)}. Không tự tính hoặc hạch toán điều chỉnh.` : `Điều khoản: ${escapeHtml(order.terms || "Chưa ghi nhận")}. Chỉ lưu chứng từ đã đối chiếu; không thực hiện thanh toán.`}</div></div></div>${amount}${details}${inputField("reference", "Số chứng từ đối chiếu", "text", "", "required maxlength=120")}${purchaseEvidenceField("Chứng từ đã kiểm tra")}<label class="small"><input type="checkbox" name="verified" required> Tôi đã đối chiếu chứng từ và xác minh số tiền với hồ sơ này.</label>`, async (data) => {
+    const rawAmount = String(data.get("amount") ?? "").trim(), value = Number(rawAmount);
+    const reference = String(data.get("reference") ?? "").trim(), file = data.get("evidence");
+    const note = String(data.get("note") ?? "").trim(), date = String(data.get("date") ?? "");
+    const duplicate = () => !adjustment && (order.supplierPayments || []).some((entry) => entry.reference.toLowerCase() === reference.toLowerCase());
+    const validTotal = () => adjustment || Number.isSafeInteger((order.supplierPayments || []).reduce((sum, entry) => sum + entry.amount, 0) + value);
+    if (!guardAction(action) || !canRecord()) return formError("Hồ sơ không còn có thể ghi nhận.");
+    if (!rawAmount || !Number.isSafeInteger(value) || (!adjustment && value <= 0) || !validTotal()) return formError("Kiểm tra số tiền theo đơn vị VND.");
+    if (!reference || reference.length > 120 || !file?.name || !data.has("verified")) return formError("Cần số chứng từ, tệp và xác nhận đã kiểm tra.");
+    if (adjustment && (!note || note.length > 240)) return formError("Nhập căn cứ điều chỉnh đã đối chiếu.");
+    if (!adjustment) {
+      const parsed = new Date(`${date}T00:00:00Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(+parsed) || parsed.toISOString().slice(0, 10) !== date || date > isoDate(todayText())) return formError("Ngày thực tế thanh toán không hợp lệ hoặc ở tương lai.");
+      if (duplicate()) return formError("Chứng từ này đã được ghi nhận trên đơn đặt hàng.");
+    }
+    const dialog = activeDialog;
+    const attachment = await savePurchaseEvidence(file, adjustment ? receipt.code : order.code, () => activeDialog === dialog && guardAction(action) && canRecord() && !duplicate() && validTotal());
+    const record = { reference, evidenceId: attachment.id, verifiedAt: new Date().toISOString(), verifiedBy: currentUser().name, verifiedById: state.activeUserId };
+    if (adjustment) receipt.costAdjustment = { ...record, delta: value, note };
+    else (order.supplierPayments ||= []).push({ ...record, amount: value, date: displayDate(date) });
+    addAudit(title, adjustment ? receipt.code : order.code, `${reference} · ${money(value)}`, "success");
+    closeDialog(); render(true); toast("Đã lưu kết quả đối chiếu, không thực hiện giao dịch.");
+  }, { submitLabel: "Lưu kết quả đối chiếu" });
+}
+
+function showBasicReceiptForm() {
+  if (!state.products.some((product) => product.status === "product_active")) return toast("Thêm sản phẩm trước khi lập phiếu nhập.", "warning");
+  showForm("Lập phiếu nhập từ chứng từ nguồn", `${inputField("source", "Số chứng từ nguồn đã kiểm tra", "text", "", "required maxlength=120")}${inputField("note", "Kết quả đối chiếu", "text", "", "required maxlength=240")}<div class="section-heading mt-16"><h3>Số lượng theo chứng từ</h3><button type="button" class="btn btn-secondary btn-sm" data-action="add-cart-row">Thêm dòng</button></div><div id="cart-lines">${lineEditorRow(0)}</div>`, (data) => {
+    const source = data.get("source").trim(), note = data.get("note").trim();
+    const skus = data.getAll("cartSku"), quantities = data.getAll("cartQty");
+    const lines = skus.map((sku, index) => ({ sku, ordered: Number(quantities[index]), received: null, good: null, damaged: null, counted: false }));
+    if (!source || !note || !lines.length || new Set(skus).size !== skus.length || lines.some((line) => productBySku(line.sku)?.status !== "product_active" || !Number.isSafeInteger(line.ordered) || line.ordered < 1)) return formError("Nhập chứng từ, kết quả đối chiếu và số lượng nguyên dương cho từng SKU không trùng.");
+    if (state.receipts.some((receipt) => receipt.source?.toLowerCase() === source.toLowerCase())) return formError("Chứng từ nguồn này đã có phiếu nhập.");
+    const receipt = { code: nextCode(state.receipts, "code", `PN-${new Date().getFullYear()}-`), po: "", source, supplier: "", eta: todayText(), owner: currentUser().name, status: "receiving", lines, evidence: [], note };
+    state.receipts.unshift(receipt);
+    addAudit("Lập phiếu nhập từ chứng từ nguồn", receipt.code, source);
+    closeDialog(); navigate(`receipts/${receipt.code}`);
+  }, { submitLabel: "Lập phiếu" });
 }
 
 function createWholesaleOrder(code) {
@@ -186,39 +280,92 @@ function createWholesaleOrder(code) {
   if (!contract || contract.status !== "active") return toast("Hoàn tất kiểm tra, ký và lưu hợp đồng trước khi tạo đơn thực hiện.", "warning");
   const existing = state.orders.find((order) => order.contract === code && order.status !== "cancelled");
   if (existing) return navigate(`orders/${existing.code}`);
-  confirmAction("Tạo đơn thực hiện hợp đồng", `${code} · ${customerName(contract.customerId)} · ${money(contract.value)}. Đơn sử dụng lịch thanh toán và giao hàng của hợp đồng.`, () => {
-    const order = { code: nextCode(state.orders, "code", `SO-${new Date().getFullYear()}-`), customerId: contract.customerId, type: "Bán sỉ", channel: "Hợp đồng", quote: contract.quote, contract: code, owner: currentUser().name, created: todayText(), createdAt: new Date().toISOString(), status: contract.paid ? "eligible" : "pending_payment", total: contract.value, paid: contract.paid, lines: contract.lines.map((line) => ({ ...line, held: 0, shipped: 0 })), note: "" };
+  const customer = customerById(contract.customerId);
+  showForm("Tạo đơn thực hiện hợp đồng", shippingAddressFields(customer), (data) => {
+    if (contractByCode(code) !== contract || contract.status !== "active") return formError("Hợp đồng không còn đủ điều kiện tạo đơn.");
+    if (state.orders.some((order) => order.contract === code && order.status !== "cancelled")) return formError("Hợp đồng đã có đơn thực hiện.");
+    const address = selectedShippingAddress(data, customer);
+    if (!address) return formError("Chọn hoặc nhập địa chỉ nhận hàng hợp lệ.");
+    const order = { code: nextCode(state.orders, "code", `SO-${new Date().getFullYear()}-`), customerId: contract.customerId, type: "Bán sỉ", channel: "Hợp đồng", quote: contract.quote, contract: code, owner: currentUser().name, created: todayText(), createdAt: new Date().toISOString(), status: "pending_payment", total: contract.value, paid: contract.paid, lines: contract.lines.map((line) => ({ ...line, held: 0, shipped: 0 })), address, note: "" };
+    if (orderEligible(order)) { order.status = "eligible"; order.eligibleAt = order.createdAt; }
     state.orders.unshift(order); addAudit("Tạo đơn từ hợp đồng", order.code, code);
     navigate(`orders/${order.code}`); toast("Đã tạo đơn thực hiện hợp đồng.");
-  });
+  }, { subtitle: `${code} · ${customerName(contract.customerId)} · ${money(contract.value)}. Đơn sử dụng lịch thanh toán và giao hàng của hợp đồng.`, submitLabel: "Tạo đơn hàng", input: updateShippingAddressField });
 }
 
 function showDeliverySchedule(code) {
+  const actor = deliveryActionActor("schedule-delivery");
   const delivery = state.deliveries.find((item) => item.code === code);
-  if (!delivery || !["delivery_pending", "failed"].includes(delivery.status)) return;
-  showForm(delivery.status === "failed" ? "Lên lịch giao lại" : "Bàn giao vận chuyển", `<div class="form-grid">${inputField("carrier", "Đơn vị vận chuyển", "text", delivery.carrier || "", "required")}${inputField("planned", "Ngày giao dự kiến", "date", isoDate(todayText()), "required")}${inputField("fee", "Phí vận chuyển (VND)", "number", delivery.fee || 0, "required min=0 step=1")}${selectField("payer", "Bên chịu phí", [["SoulWine", "SoulWine"], ["Khách hàng", "Khách hàng"]], delivery.payer)}${inputField("address", "Địa chỉ giao", "text", delivery.address || customerById(delivery.customerId)?.address || "", "required")}${inputField("tracking", "Mã vận đơn", "text", delivery.tracking || "")}</div>`, (data) => {
-    if (state.returns.some((item) => item.delivery === code && item.status === "completed")) return formError("Hàng đã được nhập hoàn. Cần lập phiếu xuất mới trước khi giao lại.");
-    Object.assign(delivery, { carrier: data.get("carrier"), planned: displayDate(data.get("planned")), fee: Number(data.get("fee")), payer: data.get("payer"), address: data.get("address"), tracking: data.get("tracking"), status: "shipping" });
-    const order = orderByCode(delivery.order); if (order) order.status = "shipping";
-    addAudit("Bàn giao vận chuyển", code, delivery.carrier); closeDialog(); render(true); toast("Đã lưu lịch và thông tin vận chuyển.");
-  });
+  if (!actor || !delivery) return;
+  const blocked = deliveryReturnBlock(delivery);
+  if (blocked) return toast(blocked, "warning");
+  const { status, scheduledAt, resultRecordedAt } = delivery;
+  const remaining = deliveryOutstandingItems(delivery);
+  if (!["delivery_pending", "failed", "delivery_partial"].includes(status) || !remaining.length) return;
+  const customer = customerById(delivery.customerId);
+  const addressFields = shippingAddressFields(customer, delivery.address || orderByCode(delivery.order)?.address, "Địa chỉ giao");
+  showForm(status === "delivery_pending" ? "Bàn giao vận chuyển" : "Lên lịch giao lại phần chưa giao", `<p class="small muted">Số lượng bàn giao lần này: ${remaining.map(({ sku, qty }) => `${escapeHtml(sku)}: ${num(qty)}`).join(" · ")}</p><div class="form-grid">${inputField("carrier", "Đơn vị vận chuyển", "text", delivery.carrier || "", "required")}${inputField("planned", "Ngày giao dự kiến", "date", isoDate(todayText()), "required")}${inputField("fee", "Phí vận chuyển (VND)", "number", delivery.fee || 0, "required min=0 step=1")}${selectField("payer", "Bên chịu phí", [["SoulWine", "SoulWine"], ["Khách hàng", "Khách hàng"]], delivery.payer)}${addressFields}${inputField("tracking", "Mã vận đơn", "text", delivery.tracking || "")}</div>`, (data) => {
+    if (deliveryActionActor("schedule-delivery") !== actor || !state.deliveries.includes(delivery) || delivery.status !== status || delivery.scheduledAt !== scheduledAt || delivery.resultRecordedAt !== resultRecordedAt || (delivery.shipmentId && deliveryShipment(delivery)?.delivery !== code)) return formError("Chuyến giao không còn ở trạng thái có thể bàn giao.");
+    const conflict = deliveryReturnBlock(delivery);
+    if (conflict) return formError(conflict);
+    const address = selectedShippingAddress(data, customer);
+    const carrier = String(data.get("carrier") || "").trim(), planned = data.get("planned"), fee = Number(data.get("fee")), payer = data.get("payer");
+    if (!address || !carrier || !/^\d{4}-\d{2}-\d{2}$/.test(planned) || !Number.isSafeInteger(fee) || fee < 0 || !["SoulWine", "Khách hàng"].includes(payer)) return formError("Nhập lịch giao, đơn vị vận chuyển, địa chỉ, phí và bên chịu phí hợp lệ.");
+    const order = orderByCode(delivery.order);
+    if (!order || order.status === "cancelled") return formError("Đơn hàng không còn được giao.");
+    Object.assign(delivery, { attempts: deliveryAttempts(delivery), carrier, planned: displayDate(planned), fee, payer, address, tracking: data.get("tracking"), status: "shipping", scheduledAt: new Date().toISOString() });
+    order.status = "shipping";
+    addAudit("Bàn giao vận chuyển", code, `${carrier} · ${remaining.map(({ sku, qty }) => `${sku}: ${qty}`).join(", ")}`); closeDialog(); render(true); toast("Đã lưu lịch và thông tin vận chuyển.");
+  }, { input: updateShippingAddressField });
 }
 
-function showReturnForm() {
-  const orders = state.orders.filter((order) => order.lines.some((line) => line.shipped > 0));
-  if (!orders.length) return toast("Chưa có đơn đã xuất để lập yêu cầu đổi trả.", "info");
-  showForm("Tiếp nhận yêu cầu đổi trả", `${selectField("order", "Đơn hàng", orders.map((order) => [order.code, `${order.code} · ${customerName(order.customerId)}`]))}${selectField("sku", "Sản phẩm", state.products.map((product) => [product.sku, product.name]))}${inputField("qty", "Số lượng hoàn", "number", 1, "required min=1 step=1")}${selectField("source", "Nguyên nhân thuộc trách nhiệm", [["SoulWine", "SoulWine"], ["Vận chuyển", "Đơn vị vận chuyển"]])}${inputField("reason", "Mô tả lỗi và căn cứ", "text", "", "required maxlength=240")}`, (data) => {
-    const order = orderByCode(data.get("order")), sku = data.get("sku"), qty = Number(data.get("qty"));
-    const line = order.lines.find((item) => item.sku === sku);
-    const returned = state.returns.filter((item) => item.order === order.code && item.sku === sku && item.status !== "rejected").reduce((sum, item) => sum + item.qty, 0);
-    if (!line || !Number.isSafeInteger(qty) || qty <= 0 || qty + returned > line.shipped) return formError("Số lượng hoàn phải thuộc lượng đã xuất và chưa có yêu cầu hoàn khác.");
-    const record = { code: nextCode(state.returns, "code", `DT-${new Date().getFullYear()}-`, 4), order: order.code, customerId: order.customerId, sku, qty, reason: data.get("reason"), source: data.get("source"), status: "inspecting", createdAt: todayText(), evidence: [], note: "Chờ nhận hàng thực tế và kiểm tra" };
-    state.returns.unshift(record); addAudit("Tiếp nhận yêu cầu đổi trả", record.code, `${record.source}: ${record.reason}`);
-    closeDialog(); render(true); toast("Đã tạo yêu cầu; tồn chỉ cập nhật sau khi nhận hàng thực tế.");
-  });
+function showReturnForm(receiveDirectly = false) {
+  const action = receiveDirectly ? "new-undelivered-return" : "new-return";
+  const actor = deliveryActionActor(action);
+  if (!actor) return;
+  const returnableItems = (delivery) => {
+    const order = orderByCode(delivery?.order);
+    const kind = deliveryReturnKind(delivery);
+    if (!order || !kind || delivery.status === "returned" || (receiveDirectly && kind !== "undelivered")) return [];
+    return (delivery.items || []).filter(({ sku }) => productBySku(sku) && order.lines.some((line) => line.sku === sku) && deliveryReturnRemaining(delivery, sku) > 0);
+  };
+  const deliveries = state.deliveries.filter((delivery) => returnableItems(delivery).length);
+  if (!deliveries.length) return toast(receiveDirectly ? "Không còn lượng chưa giao để lập phiếu mới. Nếu đã có phiếu chờ nhận, mở phiếu đó để ghi thực nhận." : "Không có chuyến đã giao hoặc giao thất bại còn hàng để tiếp nhận hoàn.", "info");
+  const context = receiveDirectly ? `${deliveryTimestampField("Hàng trả về thực tế lúc")}${inputField("reason", "Căn cứ bàn giao / ghi chú kiểm đếm", "text", "", "required maxlength=240")}<p class="small muted">Nếu đã có phiếu chờ nhận, mở phiếu đó để ghi thực nhận. Bước này chưa cập nhật tồn.</p>` : `${selectField("source", "Nguyên nhân thuộc trách nhiệm", [["", "Chọn bên chịu trách nhiệm"], ["SoulWine", "SoulWine"], ["Vận chuyển", "Đơn vị vận chuyển"]])}${inputField("reason", "Mô tả lỗi và căn cứ", "text", "", "required maxlength=240")}`;
+  showForm(receiveDirectly ? "Nhận hàng giao không thành công" : "Tiếp nhận yêu cầu đổi trả", `${selectField("delivery", "Chuyến giao", [["", "Chọn chuyến giao"], ...deliveries.map((delivery) => [delivery.code, `${delivery.code} · ${delivery.order} · ${customerName(delivery.customerId)} · ${STATUS_META[delivery.status]?.label || delivery.status}`])])}${selectField("sku", "Sản phẩm", [["", "Chọn chuyến giao trước"]])}${inputField("qty", receiveDirectly ? "Số thực nhận" : "Số lượng hoàn", "number", receiveDirectly ? "" : 1, "required min=1 step=1")}${context}`, (data) => {
+    if (deliveryActionActor(action) !== actor) return formError("Vai trò hoặc dữ liệu đã thay đổi. Tải lại hồ sơ và thử lại.");
+    const delivery = state.deliveries.find((item) => item.code === data.get("delivery"));
+    const sku = data.get("sku"), qty = Number(data.get("qty")), reason = String(data.get("reason") || "").trim(), source = data.get("source");
+    if (!returnableItems(delivery).some((item) => item.sku === sku)) return formError("Chọn chuyến giao hợp lệ và sản phẩm còn được hoàn trên chuyến đó.");
+    if (!Number.isSafeInteger(qty) || qty <= 0 || qty > deliveryReturnRemaining(delivery, sku)) return formError("Số lượng hoàn phải là số nguyên dương và không vượt phần còn được hoàn trên chuyến này.");
+    const receivedAt = receiveDirectly ? deliveryTimestamp(data) : "";
+    if (!reason || reason.length > 240 || (receiveDirectly ? !receivedAt : !["SoulWine", "Vận chuyển"].includes(source))) return formError(receiveDirectly ? "Cần thời điểm thực nhận và căn cứ bàn giao." : "Chọn bên chịu trách nhiệm và nêu lỗi, căn cứ đổi trả.");
+    const order = orderByCode(delivery.order);
+    const record = { code: nextCode(state.returns, "code", `DT-${new Date().getFullYear()}-`, 4), order: order.code, customerId: order.customerId, delivery: delivery.code, returnKind: deliveryReturnKind(delivery), sku, qty, reason, source, status: "inspecting", createdAt: todayText(), evidence: [], note: "Chờ nhận hàng thực tế và kiểm tra" };
+    state.returns.unshift(record);
+    if (receiveDirectly) {
+      record.note = "Kho đã nhận hàng giao không thành công";
+      recordReturnReceipt(record, receivedAt, reason);
+    } else addAudit("Tiếp nhận yêu cầu đổi trả", record.code, `${delivery.code} · ${record.source}: ${record.reason}`);
+    closeDialog(); render(true); toast(receiveDirectly ? "Đã lưu thực nhận; chưa thay đổi tồn kho." : "Đã tạo yêu cầu; tồn chỉ cập nhật sau khi kiểm tra và xác nhận nhập.");
+  }, { input: () => {
+    const form = document.getElementById("action-form");
+    const delivery = state.deliveries.find((item) => item.code === form.elements.delivery.value);
+    const skuInput = form.elements.sku;
+    if (skuInput.dataset.delivery !== (delivery?.code || "")) {
+      skuInput.dataset.delivery = delivery?.code || "";
+      skuInput.innerHTML = `<option value="">${delivery ? "Chọn sản phẩm" : "Chọn chuyến giao trước"}</option>${returnableItems(delivery).map(({ sku }) => `<option value="${escapeHtml(sku)}">${escapeHtml(`${sku} · ${productBySku(sku).name} · Còn được hoàn: ${deliveryReturnRemaining(delivery, sku)}`)}</option>`).join("")}`;
+    }
+    if (skuInput.value) form.elements.qty.max = deliveryReturnRemaining(delivery, skuInput.value);
+    else form.elements.qty.removeAttribute("max");
+  } });
 }
 
 function handleManagementAction(action, data) {
+  return handleManagementActionAsync(action, data);
+}
+
+async function handleManagementActionAsync(action, data) {
   switch (action) {
     case "new-product": return showProductForm();
     case "edit-product": return showProductForm(data.sku);
@@ -227,6 +374,7 @@ function handleManagementAction(action, data) {
     case "new-purchase-request": return showPurchaseRequestForm();
     case "create-po": return showPurchaseOrderForm(data.code);
     case "create-receipt": return showReceiptForm(data.code);
+    case "create-basic-receipt": return showBasicReceiptForm();
     case "create-wholesale-order": return createWholesaleOrder(data.code);
     case "schedule-delivery": return showDeliverySchedule(data.code);
     case "new-return": return showReturnForm();
@@ -242,7 +390,37 @@ function handleManagementAction(action, data) {
     }
     case "backup-workspace": return workspaceBackup();
     case "retry-save": persistWorkspace(); renderStorageStatus(); return;
-    case "reload-workspace": return confirmAction("Tải dữ liệu mới", "Thay thế nội dung đang mở bằng dữ liệu đã lưu từ cửa sổ khác.", () => { const payload = JSON.parse(localStorage.getItem(WORKSPACE_KEY)); hydrateWorkspace(payload); render(true); });
+    case "reload-workspace": return confirmAction("Tải dữ liệu mới", serverSyncConnected() || (serverSync.enabled && serverSync.token) ? "Thay thế nội dung đang mở bằng bản dữ liệu dùng chung mới nhất từ máy chủ. Thay đổi cục bộ chưa được ghi sẽ bị bỏ." : "Thay thế nội dung đang mở bằng dữ liệu đã lưu từ cửa sổ khác.", async () => {
+      if (serverSync.enabled && serverSync.token) { await serverSyncAdoptServerData(true); return; }
+      const payload = JSON.parse(localStorage.getItem(WORKSPACE_KEY)); hydrateWorkspace(payload); render(true);
+    });
+    case "connect-sync": {
+      if (!guardAction("connect-sync")) return;
+      const raw = String(document.getElementById("form-syncUrl")?.value || "").trim().replace(/\/+$/, "");
+      if (!/^https?:\/\/[^\s]+$/i.test(raw)) return toast("Nhập địa chỉ máy chủ hợp lệ (http hoặc https).", "warning");
+      if (!serverSync.sessionLogin) return toast("Đăng nhập lại trên thiết bị này, rồi mở Cài đặt để kết nối máy chủ.", "warning");
+      const reachable = await serverSyncTestConnection(raw);
+      if (!reachable) return toast("Không tìm thấy SoulWine API tại địa chỉ này. Kiểm tra máy chủ đã chạy chưa.", "warning");
+      writeSyncConfig({ enabled: true, baseUrl: raw });
+      serverSync.enabled = true;
+      serverSync.baseUrl = raw;
+      serverSync.state = "connecting";
+      addAudit("Kết nối dữ liệu dùng chung", raw, `Tài khoản máy chủ: ${serverSync.sessionLogin.email}`);
+      await serverSyncFinishLogin(serverSync.sessionLogin.email, serverSync.sessionLogin.apiPassword, serverSync.sessionLogin.newPassword, serverSync.sessionLogin.role);
+      render(true);
+      return toast(serverSync.state === "active" ? "Đã kết nối và đồng bộ dữ liệu dùng chung." : serverSync.lastError || "Máy chủ chưa chấp nhận kết nối; dữ liệu vẫn trên thiết bị.", serverSync.state === "active" ? "info" : "warning");
+    }
+    case "disconnect-sync": {
+      if (!guardAction("disconnect-sync")) return;
+      writeSyncConfig({ enabled: false, baseUrl: serverSync.baseUrl });
+      serverSync.enabled = false;
+      serverSyncClearToken();
+      serverSync.state = "off";
+      serverSync.lastError = "";
+      addAudit("Ngắt kết nối dữ liệu dùng chung", "Máy chủ", "Dữ liệu trở lại lưu trên thiết bị");
+      render(true);
+      return toast("Đã ngắt kết nối. Dữ liệu tiếp tục lưu trên thiết bị.");
+    }
     case "download-recovery": return downloadBlob(new Blob([workspaceStatus.raw], { type: "application/json" }), "SoulWine-can-khoi-phuc.json");
     case "restore-backup": return restoreWorkspaceFile();
     case "clear-workspace": return showForm("Xóa dữ liệu nghiệp vụ trên thiết bị", `<div class="banner danger mb-16">Tất cả danh mục, giao dịch và tệp đính kèm sẽ bị xóa. Nhân sự và cấu hình được giữ lại. Tải bản sao lưu trước khi tiếp tục.</div>${inputField("confirmation", "Nhập XÓA DỮ LIỆU để xác nhận", "text", "", "required")}`, (form) => {
@@ -337,9 +515,10 @@ function validateRestoredData(data) {
       if (credential.lockUntil !== null && !/^\d{4}-\d{2}-\d{2}T/.test(String(credential.lockUntil))) throw new Error("Thời điểm khóa đăng nhập không hợp lệ.");
     }
   }
-  if (data.receipts.some((item) => !Array.isArray(item.lines) || !Array.isArray(item.evidence))) throw new Error("Hồ sơ tiếp nhận không hợp lệ.");
+  if (data.receipts.some((item) => !Array.isArray(item.lines) || !Array.isArray(item.evidence) || (item.costAdjustment && !Number.isSafeInteger(item.costAdjustment.delta)))) throw new Error("Hồ sơ tiếp nhận không hợp lệ.");
   if (data.stocktakes.some((item) => !Array.isArray(item.lines))) throw new Error("Hồ sơ kiểm kê không hợp lệ.");
   const rules = data.settings.rules;
+  if (rules.allowStocktakeCancellation !== undefined && typeof rules.allowStocktakeCancellation !== "boolean") throw new Error("Quy tắc hủy kỳ kiểm kê không hợp lệ.");
   for (const [key, minimum, maximum, optional] of [["receiptTolerance", 0, 100, true], ["quoteValidityDays", 1, 365, false], ["holdDays", 1, 365, true], ["approvalHours", 1, 720, true], ["quoteReminderDays", 0, 30, false], ["shipmentReminderDays", 0, 30, false]]) {
     if (optional && rules[key] === null) continue;
     if (typeof rules[key] !== "number" || !Number.isFinite(rules[key]) || rules[key] < minimum || rules[key] > maximum) throw new Error("Quy tắc vận hành không hợp lệ.");

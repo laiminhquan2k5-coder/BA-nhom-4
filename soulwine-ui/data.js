@@ -36,7 +36,7 @@ const NAV_GROUPS = [
     { route: "purchase-orders", label: "Đơn đặt hàng", icon: "file", roles: ["director", "accountant", "warehouse_manager"], match: ["purchase-orders"] },
     { route: "receipts", label: "Tiếp nhận hàng", icon: "truck", roles: ["director", "accountant", "warehouse_manager", "warehouse_staff"], match: ["receipts"] },
     { route: "deliveries", label: "Giao nhận", icon: "truck", roles: ALL_ROLES.filter((role) => role !== "warehouse_staff"), match: ["deliveries"] },
-    { route: "returns", label: "Đổi trả", icon: "refresh", roles: ALL_ROLES.filter((role) => role !== "warehouse_staff"), match: ["returns"] }
+    { route: "returns", label: "Đổi trả", icon: "refresh", roles: ALL_ROLES, match: ["returns"] }
   ] },
   { label: "Quản trị", items: [
     { route: "reports", label: "Báo cáo & phân tích", icon: "chart", roles: ["director", "accountant", "sales_manager", "warehouse_manager"], match: ["reports"] },
@@ -66,7 +66,7 @@ const STATUS_META = {
   pending_confirm: { label: "Chờ xác nhận", tone: "warning" }, inspecting: { label: "Đang kiểm tra", tone: "warning" },
   product_active: { label: "Đang kinh doanh", tone: "success" }, product_inactive: { label: "Ngừng kinh doanh", tone: "neutral" },
   user_active: { label: "Đang hoạt động", tone: "success" }, user_locked: { label: "Đã khóa", tone: "danger" },
-  delivery_pending: { label: "Chờ giao", tone: "neutral" }, low: { label: "Dưới định mức", tone: "warning" },
+  delivery_pending: { label: "Chờ giao", tone: "neutral" }, delivery_partial: { label: "Giao một phần", tone: "warning" }, return_received: { label: "Đã nhận · Chờ nhập", tone: "warning" }, low: { label: "Dưới định mức", tone: "warning" },
   out: { label: "Cạn hàng", tone: "danger" }
 };
 const ENTITY_KEYS = ["customers", "products", "quotes", "orders", "contracts", "reservations", "approvals", "payments", "receipts", "purchaseRequests", "purchaseOrders", "suppliers", "deliveries", "returns", "documents", "issues", "movements", "stocktakes", "audit", "users"];
@@ -97,22 +97,74 @@ function contractByCode(code) { return state.contracts.find((item) => item.code 
 function receiptByCode(code) { return state.receipts.find((item) => item.code === code); }
 function stocktakeByCode(code) { return state.stocktakes.find((item) => item.code === code); }
 function availableOf(product) { return Math.max(0, product.physical - product.held - product.damaged); }
-function quoteTotals(quote) {
-  let subtotal = 0, discount = 0, qty = 0;
-  quote.lines.forEach((line) => { const product = productBySku(line.sku); if (!product) return; const gross = (line.price ?? product.wholesale) * line.qty; subtotal += gross; discount += Math.round(gross * ((line.discount || 0) / 100)); qty += line.qty; });
-  return { subtotal, discount, total: subtotal - discount, qty };
+function quoteLineDiscount(line) {
+  return line.discountAmount === undefined ? { mode: "percent", value: line.discount ?? 0 } : { mode: "fixed", value: line.discountAmount };
 }
-function quoteLineTotal(line) { const product = productBySku(line.sku); const gross = (line.price ?? product.wholesale) * line.qty; return gross - Math.round(gross * ((line.discount || 0) / 100)); }
+function quoteWholeDiscount(quote) { return quote.quoteDiscount ?? { mode: "percent", value: 0 }; }
+function quoteDiscountValid({ mode, value }, basis) {
+  return Number.isFinite(value) && value >= 0 && (mode === "percent" ? value <= 100 : mode === "fixed" && Number.isSafeInteger(value) && value <= basis);
+}
+function quoteDiscountVnd(discount, basis) {
+  if (!quoteDiscountValid(discount, basis)) return 0;
+  return discount.mode === "fixed" ? discount.value : Math.round(basis * (discount.value / 100));
+}
+function quoteDiscountLabel({ mode, value }) {
+  if (!value) return "—";
+  return mode === "fixed" ? money(value) : `${String(value).replace(".", ",")}%`;
+}
+function discountMoney(value) { return `${value ? "-" : ""}${money(value)}`; }
+function quoteLineTotals(line) {
+  const price = line.price ?? productBySku(line.sku)?.wholesale;
+  const subtotal = (price ?? 0) * line.qty;
+  const discount = quoteDiscountVnd(quoteLineDiscount(line), subtotal);
+  return { price, subtotal, discount, total: subtotal - discount };
+}
+function quoteTotals(quote) {
+  let subtotal = 0, lineDiscount = 0, qty = 0;
+  for (const line of quote.lines) {
+    const amounts = quoteLineTotals(line);
+    subtotal += amounts.subtotal;
+    lineDiscount += amounts.discount;
+    qty += line.qty;
+  }
+  const afterLines = subtotal - lineDiscount;
+  const wholeDiscount = quoteDiscountVnd(quoteWholeDiscount(quote), afterLines);
+  return { subtotal, lineDiscount, afterLines, wholeDiscount, discount: lineDiscount + wholeDiscount, total: afterLines - wholeDiscount, qty };
+}
 function orderPaidStatus(order) { return order.paid >= order.total ? "paid" : order.paid > 0 ? "partial" : "unpaid"; }
+function quoteIsExpired(quote) {
+  if (quote.status === "expired") return true;
+  if (!quote.validUntil) return true;
+  const iso = isoDate(quote.validUntil);
+  const day = new Date(`${iso}T12:00:00Z`);
+  return !Number.isFinite(day.valueOf()) || day.toISOString().slice(0, 10) !== iso || iso < isoDate(todayText());
+}
+function quoteStatus(quote) {
+  return !["draft", "rejected", "converted"].includes(quote.status) && quoteIsExpired(quote) ? "expired" : quote.status;
+}
 function orderEligible(order) {
-  if (order.type === "Bán lẻ") return order.paid >= order.total;
-  if (order.contract && !["signed", "active"].includes(contractByCode(order.contract)?.status)) return false;
-  return order.paid > 0;
+  if (!order || order.status === "cancelled") return false;
+  if (order.type === "Bán lẻ") return Number.isSafeInteger(order.total) && order.total > 0 && order.paid >= order.total;
+  const contract = contractByCode(order.contract);
+  if (!contract || !["signed", "active"].includes(contract.status) || !["50/50", "100%"].includes(contract.scheme) || !Number.isSafeInteger(contract.value) || contract.value <= 0) return false;
+  return Number.isSafeInteger(contract.paid) && contract.paid >= (contract.scheme === "100%" ? contract.value : Math.ceil(contract.value / 2));
 }
 function orderEligibilityReason(order) {
-  if (order.type === "Bán lẻ") return order.paid >= order.total ? "Đã thanh toán đủ 100%" : "Đơn bán lẻ cần thanh toán đủ 100% trước khi giữ hàng";
-  if (order.contract && !["signed", "active"].includes(contractByCode(order.contract)?.status)) return "Hợp đồng chưa đủ chữ ký và hồ sơ";
-  return order.paid > 0 ? "Đã có cọc/thanh toán theo hợp đồng" : "Chưa ghi nhận cọc hoặc thanh toán";
+  if (!order || order.status === "cancelled") return "Đơn không còn được thực hiện";
+  if (order.type === "Bán lẻ") return orderEligible(order) ? "Đã thanh toán đủ 100%" : "Đơn bán lẻ cần thanh toán đủ 100% trước khi giữ hàng";
+  const contract = contractByCode(order.contract);
+  if (!contract || !["signed", "active"].includes(contract.status)) return "Hợp đồng chưa đủ chữ ký và hồ sơ";
+  if (orderEligible(order)) return "Đã đủ cọc/thanh toán theo hợp đồng";
+  if (contract.scheme === "100%") return "Hợp đồng yêu cầu thanh toán đủ 100% trước khi giữ hoặc xuất hàng";
+  if (contract.scheme === "50/50") return "Hợp đồng yêu cầu khoản thu đợt đầu đủ 50% trước khi giữ hoặc xuất hàng";
+  return "Chưa có phương án thanh toán hợp lệ";
+}
+function deliveredContractQty(contract, sku) {
+  const shipmentIds = new Set(contract.shipments.map((shipment) => shipment.id));
+  return state.deliveries.filter((delivery) => delivery.contract === contract.code && shipmentIds.has(delivery.shipmentId)).reduce((sum, delivery) => sum + deliveryAcceptedQty(delivery, sku), 0);
+}
+function canLiquidateContract(contract) {
+  return contract?.status === "active" && contract.paid >= contract.value && contract.lines.length > 0 && contract.lines.every((line) => deliveredContractQty(contract, line.sku) >= line.qty);
 }
 function arRecords() {
   const list = state.contracts.filter((contract) => contract.value > 0 && ["signed", "active", "liquidated"].includes(contract.status)).map((contract) => ({ id: contract.code, kind: "Hợp đồng", customerId: contract.customerId, total: contract.value, paid: contract.paid, remaining: Math.max(0, contract.value - contract.paid), due: contract.due, status: contract.paid >= contract.value ? "paid" : contract.paid > 0 ? "partial" : "unpaid", owner: contract.owner }));
@@ -123,7 +175,16 @@ function arRecords() {
 }
 function pendingApprovalsForRole(role) { return state.approvals.filter((item) => item.status === "pending" && item.assignee === role); }
 function unreadNotifications() { return allowedNotifications().filter((item) => item.unread).length; }
-function stockLock() { return state.stocktakes.find((item) => item.locked && item.status !== "completed"); }
+function isStocktakeLocked(period) { return !!period.locked && !["completed", "cancelled"].includes(period.status); }
+function isGroupStocktake(period) {
+  return period.scopeType === "group" && typeof period.category === "string" && !!period.category.trim() && Array.isArray(period.lines) && period.lines.length > 0 && period.lines.every((line) => typeof line?.sku === "string" && line.sku.length > 0);
+}
+function stockLock(skuOrSkus) {
+  const skus = skuOrSkus === undefined ? null : new Set(Array.isArray(skuOrSkus) ? skuOrSkus : [skuOrSkus]);
+  if (skus && !skus.size) return;
+  // Legacy periods have no structured scope; their existing lock stays warehouse-wide.
+  return state.stocktakes.find((period) => isStocktakeLocked(period) && (!skus || !isGroupStocktake(period) || period.lines.some((line) => skus.has(line.sku))));
+}
 function currentUser() {
   const user = state.users.find((item) => item.id === state.activeUserId);
   const role = ROLES[state.role];
