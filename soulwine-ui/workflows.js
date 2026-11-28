@@ -783,7 +783,7 @@ function updateContractCheck(code, name) {
     finishContractSignature(contract);
   }, false, code);
   contract.checklist[name] = true;
-  if (name === "accountantCheck") contract.status = "pending_sign";
+  if (name === "accountantCheck") { contract.status = "pending_sign"; if (contract.changeRequest) contract.changeRequestResolved = true; }
   addAudit("Cập nhật ký kết", code, CONTRACT_CHECKS.find(([key]) => key === name)[1]);
   finishContractSignature(contract);
 }
@@ -1049,7 +1049,7 @@ function showCustomer(id) {
 function showProduct(sku) {
   const product = productBySku(sku);
   if (!product) return;
-  showDialog({ drawer: true, title: product.name, subtitle: `${product.sku} · ${product.origin}`, body: `${productCell(sku)}<div class="divider"></div><div class="kv-grid">${[["Nhóm", product.category], ["Nồng độ", product.abv], ["Dung tích", product.volume], ["Đơn vị", product.unit], ["Giá lẻ", money(product.retail)], ["Giá sỉ", money(product.wholesale)], ["Tồn vật lý", product.physical], ["Đang giữ", product.held], ["Hàng lỗi", product.damaged], ["Khả dụng", availableOf(product)]].map(([label, value]) => `<div><div class="kv-label">${escapeHtml(label)}</div><div class="kv-value">${escapeHtml(value)}</div></div>`).join("")}</div><div class="divider"></div>${statusChip(product.status)}<p class="hint mt-12">Nhà cung cấp: ${escapeHtml(supplierName(product.supplier))}</p>`, footer: ACTION_ROLES["toggle-product"].includes(state.role) ? `<button class="btn btn-secondary" data-action="toggle-product" data-sku="${sku}">${product.status === "product_active" ? "Ngừng kinh doanh" : "Mở lại kinh doanh"}</button>` : "" });
+    showDialog({ drawer: true, title: product.name, subtitle: `${product.sku} · ${product.origin}`, body: `${productCell(sku)}<div class="divider"></div><div class="kv-grid">${[["Nhóm", product.category], ["Nồng độ", product.abv], ["Dung tích", product.volume], ["Đơn vị", product.unit], ["Giá lẻ", money(product.retail)], ["Giá sỉ", money(product.wholesale)], ["Tồn vật lý", product.physical], ["Đang giữ", product.held], ["Hàng lỗi", product.damaged], ["Khả dụng", availableOf(product)]].map(([label, value]) => `<div><div class="kv-label">${escapeHtml(label)}</div><div class="kv-value">${escapeHtml(value)}</div></div>`).join("")}</div><div class="divider"></div>${statusChip(product.status)}<p class="hint mt-12">Nhà cung cấp: ${escapeHtml(supplierName(product.supplier))}</p><button class="btn btn-secondary btn-block" type="button" data-action="product-history" data-sku="${escapeHtml(product.sku)}">${icon("history")} Xem lịch sử giao dịch (thẻ kho)</button>`, footer: ACTION_ROLES["toggle-product"].includes(state.role) ? `<button class="btn btn-secondary" data-action="toggle-product" data-sku="${sku}">${product.status === "product_active" ? "Ngừng kinh doanh" : "Mở lại kinh doanh"}</button>` : "" });
   if (ACTION_ROLES["edit-product"].includes(state.role)) document.querySelector(".drawer-foot")?.insertAdjacentHTML("beforeend", `<button class="btn btn-primary" data-action="edit-product" data-sku="${sku}">${icon("edit")}Chỉnh sửa</button>`);
 }
 
@@ -1251,6 +1251,26 @@ function dispatchAction(action, data = {}) {
     case "complete-stocktake": return completeStocktake(data.code);
     case "open-customer": return showCustomer(data.id);
     case "open-product": return showProduct(data.sku);
+    case "product-history": {
+      if (!routeAllowed("movements")) return toast("Tra cứu lịch sử giao dịch thuộc quyền xem thẻ kho.", "warning");
+      state.ui.movementSearch = data.sku;
+      state.ui.movementType = "all";
+      navigate("movements");
+      return;
+    }
+    case "request-contract-changes": {
+      const contract = contractByCode(data.code);
+      if (!contract || state.role !== "accountant") return toast("Chỉ Kế toán được yêu cầu chỉnh sửa hợp đồng.", "warning");
+      if (contract.status !== "checking" || contract.checklist.accountantCheck) return toast("Hợp đồng không còn chờ kiểm tra điều khoản.", "warning");
+      return showForm("Yêu cầu chỉnh sửa hợp đồng", `<p class="hint mb-16">Nhân viên bán hàng sẽ cập nhật hồ sơ và trình lại; Kế toán kiểm tra trước khi chuyển ký.</p>${inputField("note", "Nội dung cần chỉnh sửa", "text", "", "required maxlength=240")}`, (form) => {
+        if (state.role !== "accountant" || contract.status !== "checking") return formError("Hợp đồng không còn chờ kiểm tra điều khoản.");
+        const note = form.get("note").trim();
+        if (!note) return formError("Nhập nội dung cần chỉnh sửa.");
+        Object.assign(contract, { changeRequest: { note, by: currentUser().name, at: nowStamp() }, changeRequestResolved: false });
+        addAudit("Yêu cầu chỉnh sửa hợp đồng", contract.code, note);
+        closeDialog(); render(true); toast("Đã gửi yêu cầu chỉnh sửa cho bộ phận bán hàng.");
+      });
+    }
     case "new-user": return showUserForm();
     case "toggle-user": {
       const user = state.users.find((item) => item.id === data.id);

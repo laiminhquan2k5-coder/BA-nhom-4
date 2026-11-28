@@ -8,7 +8,8 @@ const INITIAL_ACCOUNTS = {
   "U-002": { email: "hanh.nguyen@soulwine.vn", password: "SW-Ketoan@2026" },
   "U-003": { email: "thu.pham@soulwine.vn", password: "SW-Banhang@2026" },
   "U-004": { email: "huyen.pham@soulwine.vn", password: "SW-Nvbanhang@2026" },
-  "U-005": { email: "ngan.pham@soulwine.vn", password: "SW-Kho@2026" }
+  "U-005": { email: "ngan.pham@soulwine.vn", password: "SW-Kho@2026" },
+  [WAREHOUSE_DEMO_ACCOUNT.id]: { email: WAREHOUSE_DEMO_ACCOUNT.email, password: "SW-ThuKho@2026" }
 };
 const loginFlow = { mode: "login", email: "", userId: "", error: "", notice: "", otp: null, initialPassword: "", newPassword: "" };
 let otpTimer = null;
@@ -35,30 +36,66 @@ function passwordPolicyError(password) {
 function credentialByUserId(id) { return state.credentials.find((item) => item.userId === id); }
 function credentialByEmail(email) { return state.credentials.find((item) => item.email.toLowerCase() === String(email).trim().toLowerCase()); }
 
-async function writeCredential(userId, email, password, mustChange) {
+async function makeCredential(userId, email, password, mustChange) {
   const salt = randomToken();
-  const entry = { userId, email: String(email).trim().toLowerCase(), salt, hash: await hashPassword(password, salt), mustChange: !!mustChange, failedAttempts: 0, locked: false, lockUntil: null, pending: false, updatedAt: new Date().toISOString() };
+  return { userId, email: String(email).trim().toLowerCase(), salt, hash: await hashPassword(password, salt), mustChange: !!mustChange, failedAttempts: 0, locked: false, lockUntil: null, pending: false, updatedAt: new Date().toISOString() };
+}
+
+async function writeCredential(userId, email, password, mustChange) {
+  const entry = await makeCredential(userId, email, password, mustChange);
   const existing = credentialByUserId(userId);
   if (existing) Object.assign(existing, entry);
   else state.credentials.push(entry);
   return existing || entry;
 }
 
+async function splitLegacyWarehouseAccount(data, retainedCredential) {
+  const director = data.users.find((user) => user.id === "U-001" && user.email?.toLowerCase() === INITIAL_ACCOUNTS["U-001"].email && user.roleIds.includes("director") && user.roleIds.includes("warehouse_manager"));
+  if (!director) return false;
+  const credentials = data.credentials || [];
+  const { id, email } = WAREHOUSE_DEMO_ACCOUNT;
+  const hasManager = data.users.some((user) => user !== director && user.status === "user_active" && user.roleIds.includes("warehouse_manager") && !user.roleIds.includes("director") && credentials.some((entry) => entry.userId === user.id && !entry.pending && entry.hash));
+  if (!hasManager) {
+    if (data.users.some((user) => user.id === id || user.email?.toLowerCase() === email) || credentials.some((entry) => entry.userId === id || entry.email?.toLowerCase() === email)) return false;
+    const credential = retainedCredential?.userId === id && retainedCredential.email === email ? structuredClone(retainedCredential) : await makeCredential(id, email, INITIAL_ACCOUNTS[id].password, true);
+    data.users.push(structuredClone(WAREHOUSE_DEMO_ACCOUNT));
+    credentials.push(credential);
+    data.credentials = credentials;
+  }
+  director.roleIds = director.roleIds.filter((role) => role !== "warehouse_manager");
+  director.role = director.roleIds.map((role) => ROLES[role].label).join(" / ");
+  return true;
+}
+
+function endRemovedRoleSession(users = state.users) {
+  if (!state.loggedIn || users.some((user) => user.id === state.activeUserId && user.status === "user_active" && user.roleIds.includes(state.role))) return;
+  state.loggedIn = false;
+  try { sessionStorage.removeItem(PROFILE_KEY); } catch {}
+  serverSync.sessionLogin = null;
+  serverSyncLogout();
+  resetLoginFlow();
+}
+
 async function ensureSeedCredentials() {
-  if (state.credentials.length) return;
-  for (const user of state.users) {
-    if (credentialByUserId(user.id)) continue;
-    const preset = INITIAL_ACCOUNTS[user.id];
-    if (preset) {
-      const email = user.email || preset.email;
-      if (!user.email) user.email = email;
-      await writeCredential(user.id, email, preset.password, true);
-    } else {
-      const slug = user.name.toLocaleLowerCase("vi").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9]+/g, ".").replace(/^\.|\.$/g, "");
-      state.credentials.push({ userId: user.id, email: `${slug}@soulwine.vn`, salt: "", hash: "", mustChange: true, failedAttempts: 0, locked: false, lockUntil: null, pending: true, updatedAt: new Date().toISOString() });
+  if (workspaceStatus.error === "corrupt" || workspaceStatus.conflict) return;
+  const empty = !state.credentials.length;
+  if (empty) {
+    for (const user of state.users) {
+      if (credentialByUserId(user.id)) continue;
+      const preset = INITIAL_ACCOUNTS[user.id];
+      if (preset && (user.id !== WAREHOUSE_DEMO_ACCOUNT.id || user.email === preset.email)) {
+        const email = user.email || preset.email;
+        if (!user.email) user.email = email;
+        await writeCredential(user.id, email, preset.password, true);
+      } else {
+        const slug = user.name.toLocaleLowerCase("vi").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9]+/g, ".").replace(/^\.|\.$/g, "");
+        state.credentials.push({ userId: user.id, email: `${slug}@soulwine.vn`, salt: "", hash: "", mustChange: true, failedAttempts: 0, locked: false, lockUntil: null, pending: true, updatedAt: new Date().toISOString() });
+      }
     }
   }
-  persistWorkspace();
+  const split = await splitLegacyWarehouseAccount(state);
+  if (split) endRemovedRoleSession();
+  if (empty || split) persistWorkspace();
 }
 
 function loginStatusChip(user) {

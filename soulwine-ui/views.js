@@ -3,6 +3,7 @@ state.ui.auditSearch = state.ui.auditSearch || "";
 state.ui.movementSearch = state.ui.movementSearch || "";
 state.ui.movementType = state.ui.movementType || "all";
 state.ui.docFilter = state.ui.docFilter || "all";
+state.ui.docSearch = state.ui.docSearch || "";
 
 function supplierName(id) {
   const supplier = state.suppliers.find((item) => item.id === id);
@@ -88,7 +89,7 @@ function viewReservations() {
       productCell(reservation.sku),
       `<span class="num strong">${num(reservation.qty)}</span>`,
       `<span>${escapeHtml(reservation.since)}</span>`,
-      `<span class="muted">${reservation.expiry ? escapeHtml(reservation.expiry) : "Không đặt thời hạn"}</span>`,
+      `<span class="muted">${reservation.expiry ? escapeHtml(reservation.expiry) : "Chưa xác nhận thời hạn"}</span>`,
       statusChip(reservation.status),
       `<button class="btn btn-ghost btn-sm" data-action="release-reservation" data-id="${escapeHtml(reservation.id)}" ${reservation.status !== "holding" ? "disabled" : ""}>${icon("refresh")} Nhả giữ</button>`
     ]
@@ -1205,10 +1206,38 @@ function viewReturns() {
   </div>`;
 }
 
+function filteredDocuments() {
+  const filter = state.ui.docFilter;
+  const search = (state.ui.docSearch || "").trim().toLowerCase();
+  return state.documents.filter((document) => (filter === "all" || document.type === filter) && (!search || `${document.code} ${document.type} ${document.record} ${document.owner} ${document.date}`.toLowerCase().includes(search)));
+}
+
+function documentsTableHtml(list) {
+  return dataTable([
+    { label: "Mã chứng từ" },
+    { label: "Loại" },
+    { label: "Liên kết" },
+    { label: "Ngày lập" },
+    { label: "Tệp" },
+    { label: "Người tạo" },
+    { label: "", align: "num" }
+  ], list.map((document) => ({
+    cells: [
+      `<span class="strong">${escapeHtml(document.code)}</span>`,
+      `<span>${escapeHtml(document.type)}</span>`,
+      `<span class="mono-code">${escapeHtml(document.record)}</span>`,
+      `<span>${escapeHtml(document.date)}</span>`,
+      document.fileId ? `<button class="file-chip" data-action="view-attachment" data-id="${document.fileId}">${icon("file")}${escapeHtml(document.file)} ${icon("eye")}</button>` : attachmentChip(document.file, document.record),
+      `<span>${escapeHtml(document.owner)}</span>`,
+      `<button class="btn btn-ghost btn-sm" data-action="print-document" data-code="${escapeHtml(document.code)}">${icon("printer")} In thông tin</button>`
+    ]
+  })), { minWidth: 900, empty: emptyState("search", "Không có chứng từ phù hợp", "Đổi tab loại chứng từ hoặc xóa từ khóa để xem lại.") });
+}
+
 function viewDocuments() {
   const filter = state.ui.docFilter;
   const types = ["all", "Hợp đồng", "Báo giá", "Phiếu thu", "Phiếu xuất kho", "Hóa đơn", "Phiếu nhập kho"];
-  const list = state.documents.filter((document) => filter === "all" || document.type === filter);
+  const list = filteredDocuments();
   return `${pageHead({
     title: "Chứng từ",
     subtitle: "Bộ chứng từ liên kết đơn hàng, hợp đồng và thanh toán.",
@@ -1217,27 +1246,9 @@ function viewDocuments() {
   <div class="card">
     <div class="table-toolbar">
       <div class="toolbar-left">${filterTabs("docFilter", types.map((type) => ({ value: type, label: type === "all" ? "Tất cả" : type, count: type === "all" ? state.documents.length : state.documents.filter((document) => document.type === type).length })), filter)}</div>
-      <div class="toolbar-right"><span class="muted small">${list.length} chứng từ</span></div>
+      <div class="toolbar-right"><div class="search-box">${icon("search")}<input type="search" placeholder="Tìm mã, liên kết, người tạo, ngày lập…" value="${escapeHtml(state.ui.docSearch || "")}" data-list-search="documents" data-list-target="documents-table"></div><span class="muted small">${list.length} chứng từ</span></div>
     </div>
-    ${dataTable([
-      { label: "Mã chứng từ" },
-      { label: "Loại" },
-      { label: "Liên kết" },
-      { label: "Ngày lập" },
-      { label: "Tệp" },
-      { label: "Người tạo" },
-      { label: "", align: "num" }
-    ], list.map((document) => ({
-      cells: [
-        `<span class="strong">${escapeHtml(document.code)}</span>`,
-        `<span>${escapeHtml(document.type)}</span>`,
-        `<span class="mono-code">${escapeHtml(document.record)}</span>`,
-        `<span>${escapeHtml(document.date)}</span>`,
-        document.fileId ? `<button class="file-chip" data-action="view-attachment" data-id="${document.fileId}">${icon("file")}${escapeHtml(document.file)} ${icon("eye")}</button>` : attachmentChip(document.file, document.record),
-        `<span>${escapeHtml(document.owner)}</span>`,
-        `<button class="btn btn-ghost btn-sm" data-action="print-document" data-code="${escapeHtml(document.code)}">${icon("printer")} In thông tin</button>`
-      ]
-    })), { minWidth: 900 })}
+    <div id="documents-table">${documentsTableHtml(list)}</div>
     <div class="table-footer"><span>Hóa đơn chỉ lưu thông tin và tệp đã phát hành.</span><span>Không tích hợp phát hành trực tiếp</span></div>
   </div>`;
 }

@@ -21,3 +21,29 @@ export function seedState() {
   });
   return { revision: 0, collections };
 }
+
+export function splitLegacyWarehouseAccount(store) {
+  if (config.production) return;
+  const directorSeed = config.seedAccounts[0];
+  const legacy = (user) => user?.email?.toLowerCase() === directorSeed.email && user.roleIds.includes("director") && user.roleIds.includes("warehouse_manager");
+  if (!legacy(store.find("users", directorSeed.id))) return;
+  store.transact({ action: "users.split_warehouse_account" }, (tx) => {
+    const director = tx.find("users", directorSeed.id);
+    if (!legacy(director)) return;
+    const account = config.seedAccounts.find((item) => item.id === "U-THUKHO");
+    const users = tx.list("users"), credentials = tx.list("credentials");
+    const hasManager = users.some((user) => user !== director && user.status === "user_active" && user.roleIds.includes("warehouse_manager") && !user.roleIds.includes("director") && credentials.some((entry) => entry.userId === user.id && !entry.pending && entry.hash));
+    const now = new Date().toISOString();
+    if (!hasManager) {
+      if (users.some((user) => user.id === account.id || user.email?.toLowerCase() === account.email) || credentials.some((entry) => entry.userId === account.id || entry.email?.toLowerCase() === account.email)) return;
+      const { salt, hash } = hashPassword(config.initialPasswords[account.id]);
+      users.push({ ...structuredClone(account), phone: "", status: "user_active", createdAt: now });
+      credentials.push({ userId: account.id, email: account.email, salt, hash, mustChange: true, failedAttempts: 0, locked: false, lockUntil: null, pending: false, updatedAt: now });
+    }
+    director.roleIds = director.roleIds.filter((role) => role !== "warehouse_manager");
+    for (const session of tx.list("sessions")) {
+      if (session.userId === director.id && session.role === "warehouse_manager") session.revokedAt ||= now;
+    }
+    tx.note("Tách vai trò Thủ kho khỏi tài khoản Giám đốc, giữ nguyên thông tin đăng nhập hiện có.");
+  });
+}

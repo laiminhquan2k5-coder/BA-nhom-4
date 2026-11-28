@@ -299,14 +299,19 @@ function operationalMetrics() {
   });
   const deliveries = state.deliveries.flatMap((delivery) => delivery.attempts || (delivery.resultReceivedAt ? [delivery] : []));
   const counts = state.stocktakes.filter((period) => period.status === "completed" && period.closedLines).flatMap((period) => period.closedLines);
-  const payments = state.payments.filter((payment) => payment.status === "confirmed" && payment.evidenceReadyAt && payment.confirmedAt);
+  const accountantConfirmed = (payment) => {
+    if (payment.status !== "confirmed" || !payment.confirmedAt) return false;
+    const user = state.users.find((item) => item.id === payment.confirmedById);
+    return !payment.confirmedById || !!(user && user.roleIds.includes("accountant"));
+  };
+  const payments = state.payments.filter((payment) => payment.evidenceReadyAt && payment.status !== "rejected" && (accountantConfirmed(payment) || payment.status === "pending_confirm"));
   const returns = state.returns.filter((item) => item.receivedAt && Number.isFinite(new Date(item.receivedAt).valueOf()) && (item.returnKind === "undelivered" && item.receivedQty > 0 || !item.returnKind && item.delivery && ["failed", "returned"].includes(state.deliveries.find((delivery) => delivery.code === item.delivery)?.status)));
   return [
     { code: "K01", label: "Giữ vượt tồn", value: violations, count: reservations.length, target: "0 đơn vượt tồn · 100% có cọc/đủ tiền", route: "reservations", good: violations === 0, help: "Đối chiếu lượng giữ đang hiệu lực với tồn vật lý, hàng lỗi và điều kiện thanh toán." },
     { code: "K02", label: "Yêu cầu xuất đúng hạn", value: ratio(issueOrders, (item) => within(item.readyAt, item.requestedAt, 15)), count: issueOrders.length, target: "≥ 90% trong 15 phút", route: "orders", help: "Từ lúc đủ điều kiện và giữ đủ hàng đến yêu cầu của Bán hàng; quá hạn mà chưa gửi cũng được tính." },
     { code: "K03", label: "Cập nhật giao đúng hạn", value: ratio(deliveries, (item) => within(item.resultReceivedAt, item.resultRecordedAt, 30)), count: deliveries.length, target: "≥ 95% trong 30 phút", route: "deliveries", help: "Đo từng lần giao từ lúc xác nhận thực tế đến lúc lưu kết quả." },
     { code: "K04", label: "Khớp sau đối chiếu", value: ratio(counts, (item) => item.final === item.count), count: counts.length, target: "≥ 98% mã khớp sau đối chiếu", route: "stocktakes", help: "Đối chiếu số thực tế và tồn chốt của các kỳ đã hoàn tất." },
-    { code: "K05", label: "Xác nhận tiền đúng hạn", value: ratio(payments, (item) => { const minutes = businessMinutesBetween(item.evidenceReadyAt, item.confirmedAt); return minutes !== null && minutes <= 15; }), count: payments.length, target: "≥ 90% trong 15 phút làm việc", route: "payments", help: `Giờ làm việc ${state.settings.rules.workStart}–${state.settings.rules.workEnd}, thứ Hai–thứ Sáu.` },
+    { code: "K05", label: "Xác nhận tiền đúng hạn", value: ratio(payments, (item) => { if (!accountantConfirmed(item)) return false; const minutes = businessMinutesBetween(item.evidenceReadyAt, item.confirmedAt); return minutes !== null && minutes <= 15; }), count: payments.length, target: "≥ 90% trong 15 phút làm việc", route: "payments", help: `Giờ làm việc ${state.settings.rules.workStart}–${state.settings.rules.workEnd}, thứ Hai–thứ Sáu. Tiền mặt tại quầy do Bán hàng thu không tính là xác nhận của Kế toán; khoản chờ quá hạn vẫn được đo lường.` },
     { code: "K06", label: "Hàng hoàn trong ngày", value: ratio(returns, (item) => item.postedAt && elapsed(item.receivedAt, item.postedAt) >= 0 && new Date(item.receivedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) === new Date(item.postedAt).toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })), count: returns.length, target: "100% hàng giao không thành công đã nhận về", route: "returns", help: "Tính cả hàng đã nhận về nhưng chưa ghi nhập; đối chiếu cùng ngày theo giờ Việt Nam." }
   ];
 }
@@ -374,6 +379,8 @@ function allowedNotifications() { return state.notifications.filter((item) => (!
 function clearActiveFilters() {
   ["orderFilter", "quoteFilter", "contractFilter", "paymentFilter", "customerFilter", "productFilter", "docFilter", "movementType"].forEach((key) => state.ui[key] = "all");
   ["orderSearch", "quoteSearch", "contractSearch", "customerSearch", "productSearch", "availabilitySearch", "auditSearch", "movementSearch"].forEach((key) => state.ui[key] = "");
+  state.ui.docSearch = "";
+  ["orderDateFrom", "orderDateTo"].forEach((key) => state.ui[key] = "");
   state.ui.auditFilter = {};
   state.ui.tableViews = {}; render(true);
 }

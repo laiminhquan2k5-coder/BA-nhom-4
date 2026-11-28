@@ -66,12 +66,14 @@ async function serverSyncAdoptServerData(force = false) {
     validateRestoredData(data);
     data = typeof sanitizeDataTypeNotes === "function" ? sanitizeDataTypeNotes(data) : data;
     data = serverSyncMergeCredentials(data);
+    const split = await splitLegacyWarehouseAccount(data, credentialByUserId(WAREHOUSE_DEMO_ACCOUNT.id));
+    if (split) endRemovedRoleSession(data.users);
     hydrateWorkspace({ version: 1, revision: full.data.revision, savedAt: full.data.savedAt, data });
     try { localStorage.setItem(WORKSPACE_KEY, JSON.stringify({ version: 1, revision: full.data.revision, savedAt: full.data.savedAt, data })); } catch {}
   } catch { serverSync.state = "unreachable"; serverSync.lastError = "Bản dữ liệu dùng chung trên máy chủ không hợp lệ."; renderStorageStatus(); return; }
   serverSync.state = "active";
   serverSync.lastError = "";
-  if (state.loggedIn) render(true); else renderLoginScreen();
+  render(true);
   renderStorageStatus();
 }
 

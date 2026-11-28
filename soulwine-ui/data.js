@@ -75,12 +75,14 @@ const state = {
   collapsed: false, sidebarOpen: false, lastRefresh: "", attachments: {}, credentials: [],
   ...Object.fromEntries(ENTITY_KEYS.map((key) => [key, []]))
 };
+const WAREHOUSE_DEMO_ACCOUNT = { id: "U-THUKHO", name: "Thủ kho", email: "thukho@soulwine.vn", phone: "", dept: "Kho", role: "Quản lý kho", roleIds: ["warehouse_manager"], status: "user_active" };
 state.users = [
-  { id: "U-001", name: "Nguyễn Như Quỳnh", email: "quynh.nguyen@soulwine.vn", phone: "", dept: "Ban Giám đốc", role: "Giám đốc / Quản lý kho", roleIds: ["director", "warehouse_manager"], status: "user_active" },
+  { id: "U-001", name: "Nguyễn Như Quỳnh", email: "quynh.nguyen@soulwine.vn", phone: "", dept: "Ban Giám đốc", role: "Giám đốc", roleIds: ["director"], status: "user_active" },
   { id: "U-002", name: "Nguyễn Thị Mỹ Hạnh", email: "hanh.nguyen@soulwine.vn", phone: "", dept: "Kế toán", role: "Kế toán", roleIds: ["accountant"], status: "user_active" },
   { id: "U-003", name: "Phạm Hà Thu", email: "thu.pham@soulwine.vn", phone: "", dept: "Kinh doanh", role: "Quản lý bán hàng", roleIds: ["sales_manager"], status: "user_active" },
   { id: "U-004", name: "Phạm Thị Khánh Huyền", email: "huyen.pham@soulwine.vn", phone: "", dept: "Kinh doanh", role: "Nhân viên bán hàng", roleIds: ["sales_staff"], status: "user_active" },
-  { id: "U-005", name: "Phạm Kim Ngân", email: "ngan.pham@soulwine.vn", phone: "", dept: "Kho", role: "Nhân viên kho", roleIds: ["warehouse_staff"], status: "user_active" }
+  { id: "U-005", name: "Phạm Kim Ngân", email: "ngan.pham@soulwine.vn", phone: "", dept: "Kho", role: "Nhân viên kho", roleIds: ["warehouse_staff"], status: "user_active" },
+  structuredClone(WAREHOUSE_DEMO_ACCOUNT)
 ];
 
 function escapeHtml(value) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }

@@ -23,18 +23,20 @@ export const config = {
     scryptKeyLength: 64
   },
   seedAccounts: [
-    { id: "U-001", name: "Nguyễn Như Quỳnh", email: "quynh.nguyen@soulwine.vn", dept: "Ban Giám đốc", roleIds: ["director", "warehouse_manager"] },
+    { id: "U-001", name: "Nguyễn Như Quỳnh", email: "quynh.nguyen@soulwine.vn", dept: "Ban Giám đốc", roleIds: ["director"] },
     { id: "U-002", name: "Nguyễn Thị Mỹ Hạnh", email: "hanh.nguyen@soulwine.vn", dept: "Kế toán", roleIds: ["accountant"] },
     { id: "U-003", name: "Phạm Hà Thu", email: "thu.pham@soulwine.vn", dept: "Kinh doanh", roleIds: ["sales_manager"] },
     { id: "U-004", name: "Phạm Thị Khánh Huyền", email: "huyen.pham@soulwine.vn", dept: "Kinh doanh", roleIds: ["sales_staff"] },
-    { id: "U-005", name: "Phạm Kim Ngân", email: "ngan.pham@soulwine.vn", dept: "Kho", roleIds: ["warehouse_staff"] }
+    { id: "U-005", name: "Phạm Kim Ngân", email: "ngan.pham@soulwine.vn", dept: "Kho", roleIds: ["warehouse_staff"] },
+    { id: "U-THUKHO", name: "Thủ kho", email: "thukho@soulwine.vn", dept: "Kho", roleIds: ["warehouse_manager"] }
   ],
   initialPasswords: {
     "U-001": "SW-Giamdoc@2026",
     "U-002": "SW-Ketoan@2026",
     "U-003": "SW-Banhang@2026",
     "U-004": "SW-Nvbanhang@2026",
-    "U-005": "SW-Kho@2026"
+    "U-005": "SW-Kho@2026",
+    "U-THUKHO": "SW-ThuKho@2026"
   },
   internalEntities: ["sessions", "outbox", "credentials"]
 };

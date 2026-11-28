@@ -8,7 +8,8 @@ import { ApiError } from "../src/http/http.js";
 import { backupWorkspace } from "../scripts/backup.js";
 import { DatabaseSync } from "node:sqlite";
 import { config } from "../src/config.js";
-import { seedState } from "../src/store/seed.js";
+import { seedState, splitLegacyWarehouseAccount } from "../src/store/seed.js";
+import { hashPassword, verifyPassword } from "../src/auth/passwords.js";
 import { spawnSync } from "node:child_process";
 
 const product = (sku) => ({ sku, name: sku, physical: 10, held: 0, damaged: 0, retail: 100, wholesale: 80, min: 2, status: "product_active" });
@@ -168,6 +169,38 @@ test("production bootstrap requires an explicit admin secret and does not seed k
     assert.equal(seeded.collections.credentials.length, 1);
     assert(!JSON.stringify(seeded).includes("UniqueAdminSecret2026"));
   } finally { Object.assign(config, before); }
+});
+
+test("legacy demo split keeps the director credential and history and revokes only the warehouse session", (t) => {
+  const { open } = fixture(t);
+  const store = open(() => {
+    const state = seedState();
+    state.collections.users[0].roleIds.push("warehouse_manager");
+    state.collections.users = state.collections.users.filter((user) => user.id !== "U-THUKHO");
+    state.collections.credentials = state.collections.credentials.filter((entry) => entry.userId !== "U-THUKHO");
+    Object.assign(state.collections.credentials[0], hashPassword("ChangedDirector2026"), { mustChange: false });
+    state.collections.sessions.push({ token: "director-session", userId: "U-001", role: "director", revokedAt: null }, { token: "old-warehouse-session", userId: "U-001", role: "warehouse_manager", revokedAt: null });
+    state.collections.products.push(product("EXISTING"));
+    return state;
+  });
+  const original = structuredClone(store.find("credentials", "U-001"));
+  splitLegacyWarehouseAccount(store);
+  assert.deepEqual(store.find("users", "U-001").roleIds, ["director"]);
+  assert.deepEqual(store.find("credentials", "U-001"), original);
+  assert.ok(verifyPassword("ChangedDirector2026", original.salt, original.hash));
+  const manager = store.find("credentials", "U-THUKHO");
+  assert.deepEqual(store.find("users", manager.userId).roleIds, ["warehouse_manager"]);
+  assert.equal(manager.mustChange, true);
+  assert.ok(verifyPassword(config.initialPasswords[manager.userId], manager.salt, manager.hash));
+  assert.ok(store.find("sessions", "old-warehouse-session").revokedAt);
+  assert.equal(store.find("sessions", "director-session").revokedAt, null);
+  assert.ok(store.find("products", "EXISTING"));
+  assert.ok(store.journal.some((entry) => entry.action === "users.split_warehouse_account"));
+  const reopened = open();
+  const revision = reopened.state.revision;
+  splitLegacyWarehouseAccount(reopened);
+  assert.equal(reopened.state.revision, revision);
+  assert.deepEqual(reopened.find("credentials", "U-THUKHO"), manager);
 });
 
 test("WAL recovers committed state and discards an unfinished transaction after abrupt process exit", (t) => {

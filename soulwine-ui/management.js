@@ -413,8 +413,8 @@ function showReturnForm(receiveDirectly = false) {
   };
   const deliveries = state.deliveries.filter((delivery) => returnableItems(delivery).length);
   if (!deliveries.length) return toast(receiveDirectly ? "Không còn lượng chưa giao để lập phiếu mới. Nếu đã có phiếu chờ nhận, mở phiếu đó để ghi thực nhận." : "Không có chuyến đã giao hoặc giao thất bại còn hàng để tiếp nhận hoàn.", "info");
-  const context = receiveDirectly ? `${deliveryTimestampField("Hàng trả về thực tế lúc")}${inputField("reason", "Căn cứ bàn giao / ghi chú kiểm đếm", "text", "", "required maxlength=240")}<p class="small muted">Nếu đã có phiếu chờ nhận, mở phiếu đó để ghi thực nhận. Bước này chưa cập nhật tồn.</p>` : `${selectField("source", "Nguyên nhân thuộc trách nhiệm", [["", "Chọn bên chịu trách nhiệm"], ["SoulWine", "SoulWine"], ["Vận chuyển", "Đơn vị vận chuyển"]])}${inputField("reason", "Mô tả lỗi và căn cứ", "text", "", "required maxlength=240")}`;
-  showForm(receiveDirectly ? "Nhận hàng giao không thành công" : "Tiếp nhận yêu cầu đổi trả", `${selectField("delivery", "Chuyến giao", [["", "Chọn chuyến giao"], ...deliveries.map((delivery) => [delivery.code, `${delivery.code} · ${delivery.order} · ${customerName(delivery.customerId)} · ${STATUS_META[delivery.status]?.label || delivery.status}`])])}${selectField("sku", "Sản phẩm", [["", "Chọn chuyến giao trước"]])}${inputField("qty", receiveDirectly ? "Số thực nhận" : "Số lượng hoàn", "number", receiveDirectly ? "" : 1, "required min=1 step=1")}${context}`, (data) => {
+  const context = receiveDirectly ? `${deliveryTimestampField("Hàng trả về thực tế lúc")}${inputField("reason", "Căn cứ bàn giao / ghi chú kiểm đếm", "text", "", "required maxlength=240")}<p class="small muted">Nếu đã có phiếu chờ nhận, mở phiếu đó để ghi thực nhận. Bước này chưa cập nhật tồn.</p>` : `${selectField("source", "Nguyên nhân thuộc trách nhiệm", [["", "Chọn bên chịu trách nhiệm"], ["SoulWine", "SoulWine"], ["Vận chuyển", "Đơn vị vận chuyển"]])}${inputField("reason", "Mô tả lỗi và căn cứ", "text", "", "required maxlength=240")}${inputField("evidence", "Bằng chứng đổi trả (ảnh hoặc biên bản)", "file", "", "accept=.jpg,.jpeg,.png,.pdf")}`;
+  showForm(receiveDirectly ? "Nhận hàng giao không thành công" : "Tiếp nhận yêu cầu đổi trả", `${selectField("delivery", "Chuyến giao", [["", "Chọn chuyến giao"], ...deliveries.map((delivery) => [delivery.code, `${delivery.code} · ${delivery.order} · ${customerName(delivery.customerId)} · ${STATUS_META[delivery.status]?.label || delivery.status}`])])}${selectField("sku", "Sản phẩm", [["", "Chọn chuyến giao trước"]])}${inputField("qty", receiveDirectly ? "Số thực nhận" : "Số lượng hoàn", "number", receiveDirectly ? "" : 1, "required min=1 step=1")}${context}`, async (data) => {
     if (deliveryActionActor(action) !== actor) return formError("Vai trò hoặc dữ liệu đã thay đổi. Tải lại hồ sơ và thử lại.");
     const delivery = state.deliveries.find((item) => item.code === data.get("delivery"));
     const sku = data.get("sku"), qty = Number(data.get("qty")), reason = String(data.get("reason") || "").trim(), source = data.get("source");
@@ -422,13 +422,18 @@ function showReturnForm(receiveDirectly = false) {
     if (!Number.isSafeInteger(qty) || qty <= 0 || qty > deliveryReturnRemaining(delivery, sku)) return formError("Số lượng hoàn phải là số nguyên dương và không vượt phần còn được hoàn trên chuyến này.");
     const receivedAt = receiveDirectly ? deliveryTimestamp(data) : "";
     if (!reason || reason.length > 240 || (receiveDirectly ? !receivedAt : !["SoulWine", "Vận chuyển"].includes(source))) return formError(receiveDirectly ? "Cần thời điểm thực nhận và căn cứ bàn giao." : "Chọn bên chịu trách nhiệm và nêu lỗi, căn cứ đổi trả.");
+    const proof = data.get("evidence");
+    if (!receiveDirectly && !proof?.name) return formError("Đính kèm bằng chứng đổi trả (ảnh hoặc biên bản).");
     const order = orderByCode(delivery.order);
     const record = { code: nextCode(state.returns, "code", `DT-${new Date().getFullYear()}-`, 4), order: order.code, customerId: order.customerId, delivery: delivery.code, returnKind: deliveryReturnKind(delivery), sku, qty, reason, source, status: "inspecting", createdAt: todayText(), evidence: [], note: "Chờ nhận hàng thực tế và kiểm tra" };
     state.returns.unshift(record);
     if (receiveDirectly) {
       record.note = "Kho đã nhận hàng giao không thành công";
       recordReturnReceipt(record, receivedAt, reason);
-    } else addAudit("Tiếp nhận yêu cầu đổi trả", record.code, `${delivery.code} · ${record.source}: ${record.reason}`);
+    } else {
+      if (proof?.name) { const [file] = await storeAttachments([proof], record.code); record.evidence.push(file.id); }
+      addAudit("Tiếp nhận yêu cầu đổi trả", record.code, `${delivery.code} · ${record.source}: ${record.reason}`);
+    }
     closeDialog(); render(true); toast(receiveDirectly ? "Đã lưu thực nhận; chưa thay đổi tồn kho." : "Đã tạo yêu cầu; tồn chỉ cập nhật sau khi kiểm tra và xác nhận nhập.");
   }, { input: () => {
     const form = document.getElementById("action-form");
@@ -474,7 +479,7 @@ async function handleManagementActionAsync(action, data) {
     case "retry-save": persistWorkspace(); renderStorageStatus(); return;
     case "reload-workspace": return confirmAction("Tải dữ liệu mới", serverSyncConnected() || (serverSync.enabled && serverSync.token) ? "Thay thế nội dung đang mở bằng bản dữ liệu dùng chung mới nhất từ máy chủ. Thay đổi cục bộ chưa được ghi sẽ bị bỏ." : "Thay thế nội dung đang mở bằng dữ liệu đã lưu từ cửa sổ khác.", async () => {
       if (serverSync.enabled && serverSync.token) { await serverSyncAdoptServerData(true); return; }
-      const payload = JSON.parse(localStorage.getItem(WORKSPACE_KEY)); hydrateWorkspace(payload); render(true);
+      const payload = JSON.parse(localStorage.getItem(WORKSPACE_KEY)); hydrateWorkspace(payload); await ensureSeedCredentials(); render(true);
     });
     case "connect-sync": {
       if (!guardAction("connect-sync")) return;

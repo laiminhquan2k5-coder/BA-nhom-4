@@ -16,7 +16,7 @@ function fixture(kind = "undelivered") {
     state.settings = {};
     state.loggedIn = true;
     state.role = "warehouse_manager";
-    state.activeUserId = "U-001";
+    state.activeUserId = "U-THUKHO";
     state.products = [{ sku: "SKU", name: "Wine", physical: 10, held: 0, damaged: 0 }];
     state.orders = [{ code: "ORDER", customerId: "CUSTOMER", type: "Bán lẻ", total: 100, paid: 100, status: "failed", lines: [{ sku: "SKU", qty: 4, shipped: 4, held: 0 }] }];
     state.deliveries = [{ code: "TRIP", order: "ORDER", status: "failed", items: [{ sku: "SKU", qty: 4 }], acceptedItems: [{ sku: "SKU", qty: 0 }] }];
@@ -189,7 +189,7 @@ test("non-accountants, stale actor and stale attachment cannot confirm finance",
   accountant(f);
   f.run('showReturnResolutionEvidence("RETURN", "finance");');
   await f.submit(financeInput);
-  f.run('showReturnFinanceResolution("RETURN"); state.role = "warehouse_manager"; state.activeUserId = "U-001";');
+  f.run('showReturnFinanceResolution("RETURN"); state.role = "warehouse_manager"; state.activeUserId = "U-THUKHO";');
   f.submit(resolutionInput);
   assert.ok(f.error);
   accountant(f);

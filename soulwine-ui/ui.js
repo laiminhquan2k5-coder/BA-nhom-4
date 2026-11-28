@@ -231,6 +231,8 @@ function ordersTableHtml(list) {
 function filteredOrders() {
   const filter = state.ui.orderFilter;
   const search = state.ui.orderSearch.trim().toLowerCase();
+  const from = state.ui.orderDateFrom || "";
+  const to = state.ui.orderDateTo || "";
   return state.orders.filter((order) => {
     const matchesFilter = filter === "all"
       || (filter === "retail" && order.type === "Bán lẻ")
@@ -240,7 +242,8 @@ function filteredOrders() {
       || (filter === "overdue" && order.status === "overdue")
       || (filter === "completed" && order.status === "completed");
     const haystack = `${order.code} ${customerName(order.customerId)} ${order.owner} ${order.channel}`.toLowerCase();
-    return matchesFilter && (!search || haystack.includes(search));
+    const created = isoDate(order.created);
+    return matchesFilter && (!search || haystack.includes(search)) && (!from || (created && created >= from)) && (!to || (created && created <= to));
   });
 }
 
@@ -267,6 +270,8 @@ function viewOrders() {
         ${filterTabs("orderFilter", tabs, state.ui.orderFilter)}
       </div>
       <div class="toolbar-right">
+        <input type="date" data-orders-date="from" value="${escapeHtml(state.ui.orderDateFrom || "")}" aria-label="Tạo từ ngày">
+        <input type="date" data-orders-date="to" value="${escapeHtml(state.ui.orderDateTo || "")}" aria-label="Tạo đến ngày">
         <span class="small muted">Toàn bộ đơn hàng</span>
         <button class="icon-btn" data-action="refresh-orders" aria-label="Làm mới danh sách">${icon("refresh")}</button>
       </div>
@@ -729,10 +734,11 @@ const CONTRACT_CHECKS = [
 ];
 
 function checklistHtml(contract) {
-  return `<div class="checklist">${CONTRACT_CHECKS.map(([key, label]) => `<button class="check-item ${contract.checklist[key] ? "checked" : ""}" data-action="contract-check" data-code="${escapeHtml(contract.code)}" data-field="${key}" ${contractCheckError(contract, key) ? "disabled" : ""}>
+  const requestChange = !contract.changeRequestResolved && contract.status === "checking" && state.role === "accountant" && !contract.checklist.accountantCheck;
+  return `${contract.changeRequest && !contract.changeRequestResolved ? `<div class="banner warning mb-16"><div><strong>Kế toán yêu cầu chỉnh sửa (${escapeHtml(contract.changeRequest.by)} · ${escapeHtml(contract.changeRequest.at)}).</strong> ${escapeHtml(contract.changeRequest.note)} Cần cập nhật hồ sơ và trình lại để Kế toán kiểm tra.</div></div>` : ""}<div class="checklist">${CONTRACT_CHECKS.map(([key, label]) => `<button class="check-item ${contract.checklist[key] ? "checked" : ""}" data-action="contract-check" data-code="${escapeHtml(contract.code)}" data-field="${key}" ${contractCheckError(contract, key) ? "disabled" : ""}>
     <span class="check-box">${icon("check")}</span>
     <span>${escapeHtml(label)}${key === "scan" ? `<span class="check-note">Bắt buộc trước khi chuyển sang Đã ký</span>` : ""}</span>
-  </button>`).join("")}</div>`;
+  </button>`).join("")}${requestChange ? `<button class="btn btn-secondary btn-block mt-12" data-action="request-contract-changes" data-code="${escapeHtml(contract.code)}">${icon("edit")} Yêu cầu chỉnh sửa</button>` : ""}</div>`;
 }
 
 function contractShipmentsHtml(contract) {

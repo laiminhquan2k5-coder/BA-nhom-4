@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { config, policyAllows } from "./src/config.js";
 import { ApiError, createRouter, json, preflight, readJsonBody } from "./src/http/http.js";
 import { Store } from "./src/store/store.js";
-import { seedState } from "./src/store/seed.js";
+import { seedState, splitLegacyWarehouseAccount } from "./src/store/seed.js";
 import { resolveSession } from "./src/auth/auth.js";
 import { createRecoveryMailer } from "./src/auth/recovery-mail.js";
 import { registerRoutes } from "./src/routes.js";
@@ -15,6 +15,7 @@ export function createApp(dataDir = config.dataDir, options = {}) {
   const recoveryMailer = options.recoveryMailer === undefined ? createRecoveryMailer() : options.recoveryMailer;
   const store = new Store(dataDir, seedState);
   store.load();
+  try { splitLegacyWarehouseAccount(store); } catch (error) { store.close(); throw error; }
   const router = createRouter();
   registerRoutes(router, store, recoveryMailer);
 

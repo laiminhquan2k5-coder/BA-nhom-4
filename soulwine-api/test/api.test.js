@@ -15,7 +15,7 @@ const emails = {
   accountant: "hanh.nguyen@soulwine.vn",
   sales_manager: "thu.pham@soulwine.vn",
   sales_staff: "huyen.pham@soulwine.vn",
-  warehouse_manager: "quynh.nguyen@soulwine.vn",
+  warehouse_manager: "thukho@soulwine.vn",
   warehouse_staff: "ngan.pham@soulwine.vn"
 };
 const initialPasswords = {
@@ -23,7 +23,8 @@ const initialPasswords = {
   "hanh.nguyen@soulwine.vn": "SW-Ketoan@2026",
   "thu.pham@soulwine.vn": "SW-Banhang@2026",
   "huyen.pham@soulwine.vn": "SW-Nvbanhang@2026",
-  "ngan.pham@soulwine.vn": "SW-Kho@2026"
+  "ngan.pham@soulwine.vn": "SW-Kho@2026",
+  "thukho@soulwine.vn": "SW-ThuKho@2026"
 };
 const accountPassword = {};
 const recoveryMessages = [];
@@ -128,10 +129,13 @@ describe("SoulWine API", () => {
     assert.ok(otpNote.length >= 1);
   });
 
-  it("yêu cầu chọn vai trò sau đăng nhập và đổi mật khẩu thu hồi phiên khác", async () => {
-    const noRole = await api("GET", "/api/stock", { token: await login("director") });
-    assert.equal(noRole.status, 403);
-    assert.equal(noRole.data.code, "role_required");
+  it("tách quyền Giám đốc và Thủ kho; đổi mật khẩu thu hồi phiên khác", async () => {
+    const director = await login("director");
+    assert.equal((await api("GET", "/api/stock", { token: director })).status, 200);
+    assert.equal((await api("POST", "/api/auth/session", { token: director, body: { role: "warehouse_manager" } })).data.code, "invalid_role");
+    const warehouse = await login("warehouse_manager");
+    assert.equal((await api("GET", "/api/stock", { token: warehouse })).data.code, "must_change_password");
+    assert.equal((await api("POST", "/api/auth/session", { token: warehouse, body: { role: "director" } })).data.code, "invalid_role");
     const token = await establish("director", "GiamDocMoi@2026");
     const wrongCurrent = await api("POST", "/api/auth/change-password", { token, body: { currentPassword: "SaiHienTai1", newPassword: "DoiLan2@2026", confirm: "DoiLan2@2026" } });
     assert.equal(wrongCurrent.status, 400);

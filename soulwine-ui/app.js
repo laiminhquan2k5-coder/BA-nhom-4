@@ -340,7 +340,8 @@ function refreshList(kind) {
     products: () => productsTableHtml(filteredProducts()),
     availability: () => availabilityTableHtml(filteredAvailability()),
     audit: () => auditTableHtml(filteredAudit()),
-    movements: () => movementsTableHtml(filteredMovements())
+    movements: () => movementsTableHtml(filteredMovements()),
+    documents: () => documentsTableHtml(filteredDocuments())
   };
   const target = document.getElementById(`${kind}-table`);
   if (target && renderers[kind]) {
@@ -770,7 +771,7 @@ document.addEventListener("input", (event) => {
     return;
   }
   if (target.dataset.listSearch) {
-    const keys = { orders: "orderSearch", quotes: "quoteSearch", contracts: "contractSearch", customers: "customerSearch", products: "productSearch", availability: "availabilitySearch", audit: "auditSearch", movements: "movementSearch" };
+    const keys = { orders: "orderSearch", quotes: "quoteSearch", contracts: "contractSearch", customers: "customerSearch", products: "productSearch", availability: "availabilitySearch", audit: "auditSearch", movements: "movementSearch", documents: "docSearch" };
     state.ui[keys[target.dataset.listSearch]] = target.value;
     return refreshList(target.dataset.listSearch);
   }
@@ -801,6 +802,13 @@ document.addEventListener("change", (event) => {
   if (target.hasAttribute("data-report-period")) { state.ui.reportPeriod = target.value; render(true); }
   if (target.hasAttribute("data-report-channel")) { state.ui.reportChannel = target.value; render(true); }
   if (target.hasAttribute("data-slow-moving-days")) { state.ui.slowMovingDays = Number(target.value); render(true); }
+  if (target.dataset.ordersDate) {
+    const key = target.dataset.ordersDate === "from" ? "orderDateFrom" : "orderDateTo";
+    const next = target.value, other = key === "orderDateFrom" ? state.ui.orderDateTo : state.ui.orderDateFrom;
+    if (next && other && (key === "orderDateFrom" ? next > other : other > next)) { toast("Từ ngày không được sau đến ngày.", "warning"); render(true); return; }
+    state.ui[key] = next;
+    return refreshList("orders");
+  }
   if (target.closest("#action-form") && activeDialog) { activeDialog.dirty = true; if (activeDialog.input) activeDialog.input(); }
   if (target.closest("#settings-form") && !target.dataset.syncField) { state.ui.settingsDirty = true; const note = document.getElementById("settings-save-note"); if (note) note.textContent = "Có thay đổi chưa lưu"; }
 });
@@ -904,8 +912,9 @@ window.addEventListener("storage", (event) => {
 window.addEventListener("resize", closePopover);
 loadWorkspace();
 initServerSync();
-ensureSeedCredentials().then(async () => {
+Promise.resolve().then(async () => {
   if (serverSync.enabled && serverSync.token) await serverSyncResumeSession();
+  await ensureSeedCredentials();
   if (workspaceStatus.error || workspaceStatus.conflict) return;
   try { installLinkedSampleData({ automatic: true }); }
   catch (error) { toast(error.message, "warning"); }
